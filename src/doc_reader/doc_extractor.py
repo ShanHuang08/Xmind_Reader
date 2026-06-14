@@ -78,6 +78,7 @@ def _sections(paragraphs: list[dict[str, str]]) -> list[dict[str, Any]]:
 def _extract_endpoints(parsed: dict[str, Any], sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     endpoints: dict[str, dict[str, Any]] = {}
     full_text = parsed.get("plain_text", "")
+    parameter_tables = _endpoint_parameter_tables(parsed, sections)
     for section in sections:
         section_text = "\n".join(section.get("content", []))
         for endpoint in ENDPOINT_RE.findall(section_text):
@@ -93,6 +94,7 @@ def _extract_endpoints(parsed: dict[str, Any], sections: list[dict[str, Any]]) -
                     ),
                 },
             )
+            endpoints[endpoint].update(parameter_tables.get(endpoint, {}))
 
     for table in parsed.get("tables", []):
         for row in table:
@@ -110,7 +112,62 @@ def _extract_endpoints(parsed: dict[str, Any], sections: list[dict[str, Any]]) -
                         ),
                     },
                 )
+                endpoints[endpoint].update(parameter_tables.get(endpoint, {}))
     return sorted(endpoints.values(), key=lambda item: item["endpoint"])
+
+
+def _endpoint_parameter_tables(
+    parsed: dict[str, Any], sections: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    tables = [table for table in parsed.get("tables", []) if _is_parameter_table(table)]
+    cursor = 0
+    by_endpoint: dict[str, dict[str, Any]] = {}
+    for section in sections:
+        endpoint = _endpoint_from_section_title(section.get("title", ""))
+        if not endpoint:
+            continue
+        entry: dict[str, Any] = {}
+        if cursor < len(tables):
+            entry["request_parameters"] = _parameter_rows(tables[cursor])
+            cursor += 1
+        if cursor < len(tables):
+            entry["response_parameters"] = _parameter_rows(tables[cursor])
+            cursor += 1
+        by_endpoint[endpoint] = entry
+    return by_endpoint
+
+
+def _endpoint_from_section_title(title: str) -> str:
+    match = ENDPOINT_RE.search(title or "")
+    return match.group(1) if match else ""
+
+
+def _is_parameter_table(table: list[list[str]]) -> bool:
+    if not table:
+        return False
+    headers = [_normalize_header(cell) for cell in table[0]]
+    return {"parameter", "type"}.issubset(set(headers))
+
+
+def _parameter_rows(table: list[list[str]]) -> list[dict[str, str]]:
+    headers = [_normalize_header(cell) for cell in table[0]]
+    rows = []
+    for row in table[1:]:
+        item = {}
+        for index, header in enumerate(headers):
+            if index >= len(row):
+                continue
+            key = {
+                "parameter": "name",
+                "type": "type",
+                "require": "required",
+                "description": "description",
+                "remark": "remark",
+            }.get(header, header.replace(" ", "_"))
+            item[key] = row[index]
+        if item.get("name"):
+            rows.append(item)
+    return rows
 
 
 def _extract_error_codes(parsed: dict[str, Any], text: str) -> list[dict[str, str]]:

@@ -2,15 +2,18 @@
 
 ## 專案目的
 
-本專案有兩個資料整理流程：
+本專案有三個資料整理流程：
 
 1. `input_xmind/` -> `xmind_detail/`
-   讀取已整理好的 XMind 測試案例知識庫，輸出給 Codex/AI 閱讀的 JSON、Markdown，以及給 QA 人員看的 Excel。
+   讀取已整理好的 XMind 測試案例知識庫，輸出給 Codex/AI 閱讀的 JSON、Markdown。
 
 2. `new_vendor_source/` -> `new_vendor_detail/`
    讀取新 Vendor 的 Confluence 匯出 Word/HTML 文件，先整理成 Codex 好閱讀的中間格式，例如 API summary、endpoints、error codes、capability profile。
 
-根目錄的 `output/` 之後保留給 AI 產生完成的新 Vendor 測試案例，例如 `newvendor_test_case.xmind`，不再放 XMind reader 的知識庫輸出。
+3. `new_vendor_detail/` -> `output/`
+   根據已整理好的 Vendor 中間格式，產生 Codex 工作用的 draft JSON 鷹架，準備給後續 AI 生成測試案例使用。
+
+根目錄的 `output/` 保留給 AI 產生完成的新 Vendor 測試案例，例如 `newvendor_test_case.xmind`，不再放 XMind reader 的知識庫輸出。
 
 本專案目前仍不是 AI 測試案例產生器。它只負責抽取、正規化、分類、切分與輸出知識。
 
@@ -25,24 +28,30 @@ new_vendor_detail/
     endpoints.json
     error_codes.json
     capability_profile.json
+    vendor_master_checklist.json
     raw_doc.json
+    source_meta.json
 xmind_detail/
   <Vendor>/
-    excel/
     summary/
     modules/
     tags/
     markdown/
     raw/
+    source_meta/
 output/
+  <Vendor>/
+    draft_test_cases.json
 src/
   parser/
   extractor/
   chunker/
   exporters/
   doc_reader/
+  generator/
   xmind_reader_main.py
   doc_reader_main.py
+  draft_main.py
 ```
 
 ## 各檔案功能說明
@@ -51,7 +60,7 @@ src/
 
 | 檔案 | 功能 |
 |---|---|
-| `main.py` | **CLI 統一入口**。提供 `xmind` 和 `doc` 兩個子命令，根據使用者選擇分別委派給 `xmind_reader_main.py` 或 `doc_reader_main.py` 執行。負責 `sys.path` 設定與引數轉發。 |
+| `main.py` | **CLI 統一入口**。提供 `xmind`、`doc`、`draft` 三個子命令，根據使用者選擇分別委派給對應的 `*_main.py` 執行。負責 `sys.path` 設定與引數轉發。 |
 
 ### XMind 流程 (`python main.py xmind`)
 
@@ -62,7 +71,6 @@ src/
 | `src/extractor/knowledge_extractor.py` | **知識抽取與正規化**。把 parser 輸出的 raw source cases 轉換為精簡的 knowledge cases：推斷 `module`、`api_name`，用關鍵字規則自動打 `tags`（positive / negative / boundary / validation / idempotency 等 18 種），抽取 `validation_points`、`db_checks`，並計算 `content_hash`（SHA256）供增量更新使用。 |
 | `src/chunker/knowledge_chunker.py` | **知識切分與重複偵測**。將 knowledge cases 依 `module` 切分為 module chunks、依 `tags` 切分為 tag chunks，方便 AI 按需讀取。同時用 `SequenceMatcher` 偵測相似度 ≥ 92% 的疑似重複 case（只標記不移除）。 |
 | `src/exporters/json_exporter.py` | **JSON 匯出模組**。提供多個函式：`export_raw`（raw JSON）、`export_source_meta`（來源檔 meta）、`export_summary`（摘要）、`export_extraction_report`（抽取報告）、`export_duplicate_report`（重複報告）、`export_chunks`（module / tag 切分 JSON）。 |
-| `src/exporters/excel_exporter.py` | **Excel 匯出模組**。用 openpyxl 建立新的 Excel 檔案（非模板），包含 11 個欄位：ID、Module、Path、Scenario、Tags、Precondition、Steps、Expected Result、DB Check、Source XMind File、Source Sheet。附帶表頭樣式、欄寬、凍結首行、自動篩選。 |
 | `src/exporters/markdown_exporter.py` | **Markdown 匯出模組**。把 module chunks 轉為 AI 友善的 `.md` 檔案。每個模組一個檔，內部依 primary tag 分組，列出 case ID、scenario、validation points、db checks。 |
 
 ### Doc Reader 流程 (`python main.py doc`)
@@ -73,6 +81,13 @@ src/
 | `src/doc_reader/doc_parser.py` | **文件解析核心**。讀取 Confluence 匯出的 Word/HTML 文件。`.doc` 走 MIME/HTML 解碼，`.docx` 走 python-docx，`.html` 走 lxml。輸出結構化資料：標題、段落、表格（含 checkbox 狀態）、連結、純文字。 |
 | `src/doc_reader/doc_extractor.py` | **Vendor API 知識抽取**。從 parsed 文件中提取：(1) API endpoints（用正則匹配 `/api/...`）；(2) error codes（從表格或文字中用正則匹配）；(3) vendor master checklist（從表格中識別 Name + Enable 欄位）；(4) capability profile（用關鍵字規則偵測 Vendor 支援的能力，如 multiple_bets、rollback、free_spin 等，並優先採用 checklist 結果）。 |
 | `src/doc_reader/doc_exporter.py` | **Vendor Detail 匯出模組**。將抽取結果寫入 7 個檔案：`api_summary.md`（給 Codex 優先閱讀的 API 摘要）、`endpoints.json`、`error_codes.json`、`capability_profile.json`、`vendor_master_checklist.json`、`source_meta.json`、`raw_doc.json`。 |
+
+### Draft 流程 (`python main.py draft`)
+
+| 檔案 | 功能 |
+|---|---|
+| `src/draft_main.py` | **Draft 流程主控制器**。接收 `--vendor` 必選引數，呼叫 `draft_builder` 從 `new_vendor_detail/<Vendor>/` 讀取已整理的中間格式，產生 draft JSON 到 `output/<Vendor>/draft_test_cases.json`。 |
+| `src/generator/draft_builder.py` | **Draft JSON 鷹架建構器**。讀取 `capability_profile.json`、`endpoints.json`、`error_codes.json`、`vendor_master_checklist.json`，組合出 Codex 工作用的 draft 檔。包含：endpoint 角色推斷（authentication / bet / settlement / rollback 等）、前置條件撰寫模板、備註撰寫規則、pending user questions。`test_cases` 欄位留空，等後續 AI 生成填入。 |
 
 ## 安裝方式
 
@@ -126,7 +141,7 @@ python main.py xmind --input EGTDigital_test_cases.xmind --vendor EGTDigital
 - `xmind_detail/<Vendor>/modules/*.json`：依模組切分的精簡 JSON。
 - `xmind_detail/<Vendor>/tags/*.json`：依標籤切分的精簡 JSON。
 - `xmind_detail/<Vendor>/markdown/*.md`：依模組產生的 AI 友善 Markdown。
-- `xmind_detail/<Vendor>/excel/knowledge_base.xlsx`：給 QA 人員審查的人類友善 Excel。
+- `xmind_detail/<Vendor>/source_meta/*_source_meta.json`：來源檔案 meta（檔名、大小、修改時間、SHA256）。
 
 ## XMind 增量處理策略
 
@@ -214,6 +229,37 @@ python main.py doc --input Vendor_Esoterica.doc --vendor Esoterica
 `new_vendor_detail/<Vendor>/source_meta.json`
 
 保存來源檔案名稱、大小與修改時間。Doc reader 會用這個檔案判斷來源是否已處理過；如果來源檔沒有變更，重複執行時會略過重建。
+
+## Draft JSON 建立方式
+
+當 `new_vendor_detail/<Vendor>/` 已經建立完成後，可以建立給 Codex 使用的新測項 draft JSON：
+
+```bash
+python main.py draft --vendor Esoterica
+```
+
+輸出：
+
+```text
+output/Esoterica/draft_test_cases.json
+```
+
+這份 draft JSON 不是最終測項，而是 Codex 後續產測項前要讀取的工作檔。內容包含：
+
+- capability profile
+- vendor master checklist
+- endpoint roles
+- request / response parameter tables
+- error codes
+- 前置條件與備註撰寫規則
+- pending user questions
+- 空的 `test_cases`
+
+後續產生測項與 XMind writer 的方向記錄在：
+
+```text
+GENERATION_PLAN.md
+```
 
 ## JSON Chunking 設計
 

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from chunker.knowledge_chunker import chunk_knowledge
-from exporters.excel_exporter import export_excel
 from exporters.json_exporter import (
     export_chunks,
     export_duplicate_report,
@@ -136,7 +135,6 @@ def main(argv: list[str] | None = None) -> int:
         report = build_vendor_report(cases, parsed_files)
         chunks = chunk_knowledge(cases)
 
-        export_excel(cases, vendor_output_dir / "excel" / "knowledge_base.xlsx")
         export_summary(report, vendor_output_dir)
         export_extraction_report(report, chunks["duplicates"], vendor_output_dir)
         export_duplicate_report(chunks["duplicates"], vendor_output_dir)

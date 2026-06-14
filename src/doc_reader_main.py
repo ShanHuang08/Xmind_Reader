@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Folder for generated vendor detail files.",
     )
     parser.add_argument("--vendor", default="", help="Optional vendor name override.")
+    parser.add_argument("--force", action="store_true", help="Force regeneration even if source file is unchanged.")
     parser.add_argument("--log-level", default="INFO", help="Logging level.")
     args = parser.parse_args(argv)
 
@@ -54,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir = Path(args.output) / vendor
             current_meta = source_meta(doc_path)
             existing_meta = load_source_meta(output_dir)
-            if existing_meta == current_meta:
+            if existing_meta == current_meta and not args.force:
                 LOGGER.info("[%s] %s unchanged. Skip regeneration.", vendor, doc_path.name)
                 LOGGER.info("[%s] Output already written to %s", vendor, output_dir)
                 continue
