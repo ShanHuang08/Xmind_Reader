@@ -1,4 +1,4 @@
-"""Unified CLI entry point for XMind and vendor document readers."""
+"""Unified CLI entry point for XMind, document, PDF, and draft readers."""
 
 from __future__ import annotations
 
@@ -38,19 +38,24 @@ Examples:
   Parse a vendor document and force the vendor folder name:
     python main.py doc --input Vendor_Esoterica.doc --vendor Esoterica
 
+  Parse a supplementary vendor API PDF:
+    python main.py pdf --pdf EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
+
   Build a Codex-facing draft JSON scaffold for generation:
     python main.py draft --vendor Esoterica
 
 Output folders:
   xmind reader -> xmind_detail/<Vendor>/
   doc reader   -> new_vendor_detail/<Vendor>/
+  pdf reader   -> new_vendor_detail/<Vendor>/vendor_pdf/
   draft builder -> output/<Vendor>/draft_test_cases.json
   output/      -> reserved for future AI-generated XMind files
 """,
     )
-    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,draft}")
+    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,draft}")
     _add_xmind_parser(subparsers)
     _add_doc_parser(subparsers)
+    _add_pdf_parser(subparsers)
     _add_draft_parser(subparsers)
     parsed = parser.parse_args(args)
 
@@ -67,6 +72,11 @@ Output folders:
         from doc_reader_main import main as doc_main
 
         return doc_main(_forward_args(parsed))
+
+    if parsed.reader == "pdf":
+        from pdf_reader_main import main as pdf_main
+
+        return pdf_main(_forward_args(parsed, names=("pdf", "vendor", "output", "log_level")))
 
     from draft_main import main as draft_main
 
@@ -140,6 +150,39 @@ Examples:
     )
     doc.add_argument("--force", action="store_true", help="Force regeneration even if source file is unchanged.")
     doc.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
+
+
+def _add_pdf_parser(subparsers: argparse._SubParsersAction) -> None:
+    pdf = subparsers.add_parser(
+        "pdf",
+        help="Parse supplementary vendor API PDFs into new_vendor_detail/<Vendor>/vendor_pdf/",
+        description=(
+            "Parse a supplementary vendor API PDF into validation, Markdown, endpoint index, "
+            "and API section chunks. DOC/HTML output remains the primary source."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py pdf --pdf EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
+  python main.py pdf --pdf C:\\Docs\\Vendor_API.pdf --vendor NewVendor --output new_vendor_detail
+  python main.py pdf --pdf Vendor_API.pdf --vendor NewVendor --output new_vendor_detail/NewVendor/vendor_pdf
+""",
+    )
+    pdf.add_argument("--pdf", required=True, help="PDF file path.")
+    pdf.add_argument(
+        "--vendor",
+        default="",
+        help="Vendor folder name. If omitted, inferred from PDF file name.",
+    )
+    pdf.add_argument(
+        "--output",
+        default="new_vendor_detail",
+        help=(
+            "Output root folder or direct vendor_pdf folder. Default: new_vendor_detail. "
+            "If the path ends with vendor_pdf, it is used directly."
+        ),
+    )
+    pdf.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
 
 
 def _add_draft_parser(subparsers: argparse._SubParsersAction) -> None:

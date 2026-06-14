@@ -13,4 +13,5 @@ input_xmind/*.xmind
 new_vendor_source/
 *.xmind
 *.doc
-Metersphere_case_OneApi.xlsx
+*.pdf
+*.xlsx

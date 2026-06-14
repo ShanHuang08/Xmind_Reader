@@ -2,7 +2,7 @@
 
 ## 專案目的
 
-本專案有三個資料整理流程：
+本專案有四個資料整理流程：
 
 1. `input_xmind/` -> `xmind_detail/`
    讀取已整理好的 XMind 測試案例知識庫，輸出給 Codex/AI 閱讀的 JSON、Markdown。
@@ -10,7 +10,10 @@
 2. `new_vendor_source/` -> `new_vendor_detail/`
    讀取新 Vendor 的 Confluence 匯出 Word/HTML 文件，先整理成 Codex 好閱讀的中間格式，例如 API summary、endpoints、error codes、capability profile。
 
-3. `new_vendor_detail/` -> `output/`
+3. PDF -> `new_vendor_detail/<Vendor>/vendor_pdf/`
+   讀取 Vendor 額外提供的 PDF API 文件，產生可供 Codex 補充查詢的 validation report、endpoint index、API section chunks 與 full text Markdown。PDF Reader 是次要參考來源，不是主要生成來源。
+
+4. `new_vendor_detail/` -> `output/`
    根據已整理好的 Vendor 中間格式，產生 Codex 工作用的 draft JSON 鷹架，準備給後續 AI 生成測試案例使用。
 
 根目錄的 `output/` 保留給 AI 產生完成的新 Vendor 測試案例，例如 `newvendor_test_case.xmind`，不再放 XMind reader 的知識庫輸出。
@@ -31,6 +34,12 @@ new_vendor_detail/
     vendor_master_checklist.json
     raw_doc.json
     source_meta.json
+    vendor_pdf/
+      manifest.json
+      validation_report.json
+      endpoint_index.json
+      full_text.md
+      sections/
 xmind_detail/
   <Vendor>/
     summary/
@@ -48,9 +57,11 @@ src/
   chunker/
   exporters/
   doc_reader/
+  pdf_reader/
   generator/
   xmind_reader_main.py
   doc_reader_main.py
+  pdf_reader_main.py
   draft_main.py
 ```
 
@@ -60,7 +71,7 @@ src/
 
 | 檔案 | 功能 |
 |---|---|
-| `main.py` | **CLI 統一入口**。提供 `xmind`、`doc`、`draft` 三個子命令，根據使用者選擇分別委派給對應的 `*_main.py` 執行。負責 `sys.path` 設定與引數轉發。 |
+| `main.py` | **CLI 統一入口**。提供 `xmind`、`doc`、`pdf`、`draft` 四個子命令，根據使用者選擇分別委派給對應的 `*_main.py` 執行。負責 `sys.path` 設定與引數轉發。 |
 
 ### XMind 流程 (`python main.py xmind`)
 
@@ -82,12 +93,23 @@ src/
 | `src/doc_reader/doc_extractor.py` | **Vendor API 知識抽取**。從 parsed 文件中提取：(1) API endpoints（用正則匹配 `/api/...`）；(2) error codes（從表格或文字中用正則匹配）；(3) vendor master checklist（從表格中識別 Name + Enable 欄位）；(4) capability profile（用關鍵字規則偵測 Vendor 支援的能力，如 multiple_bets、rollback、free_spin 等，並優先採用 checklist 結果）。 |
 | `src/doc_reader/doc_exporter.py` | **Vendor Detail 匯出模組**。將抽取結果寫入 7 個檔案：`api_summary.md`（給 Codex 優先閱讀的 API 摘要）、`endpoints.json`、`error_codes.json`、`capability_profile.json`、`vendor_master_checklist.json`、`source_meta.json`、`raw_doc.json`。 |
 
+### PDF Reader 流程 (`python main.py pdf`)
+
+| 檔案 | 功能 |
+|---|---|
+| `src/pdf_reader_main.py` | **PDF Reader 流程主控制器**。負責解析 CLI 引數、執行 PDF validation、呼叫 `pymupdf4llm` 轉 Markdown、建立 endpoint index、切分 API section chunks，最後輸出到 `new_vendor_detail/<Vendor>/vendor_pdf/`。 |
+| `src/pdf_reader/pdf_validator.py` | **PDF 可讀性驗證**。使用 PyMuPDF 檢查 PDF 是否有可抽取文字。如果是掃描或圖片型 PDF，只輸出 validation report，不做 OCR。 |
+| `src/pdf_reader/pdf_markdown_reader.py` | **PDF Markdown 轉換**。使用 `pymupdf4llm` 將 PDF 轉成 `full_text.md`。此檔只做除錯或 fallback，不建議 Codex 優先讀取。 |
+| `src/pdf_reader/pdf_endpoint_indexer.py` | **Endpoint Index 建立器**。用實用 regex 偵測 `GET /xxx`、`POST /xxx`、`/api/xxx`、`endpoint:`、`URL:`、`Path:` 等格式，產生 `endpoint_index.json`。 |
+| `src/pdf_reader/pdf_section_chunker.py` | **API Section Chunker**。依 endpoint/API 區塊切分，不產生 `page_001.json` 這類 page-level JSON。 |
+| `src/pdf_reader/pdf_exporter.py` | **PDF 輸出模組**。輸出 `manifest.json`、`validation_report.json`、`endpoint_index.json`、`sections/*.json`、`full_text.md`。 |
+
 ### Draft 流程 (`python main.py draft`)
 
 | 檔案 | 功能 |
 |---|---|
 | `src/draft_main.py` | **Draft 流程主控制器**。接收 `--vendor` 必選引數，呼叫 `draft_builder` 從 `new_vendor_detail/<Vendor>/` 讀取已整理的中間格式，產生 draft JSON 到 `output/<Vendor>/draft_test_cases.json`。 |
-| `src/generator/draft_builder.py` | **Draft JSON 鷹架建構器**。讀取 `capability_profile.json`、`endpoints.json`、`error_codes.json`、`vendor_master_checklist.json`，組合出 Codex 工作用的 draft 檔。包含：endpoint 角色推斷（authentication / bet / settlement / rollback 等）、前置條件撰寫模板、備註撰寫規則、pending user questions。`test_cases` 欄位留空，等後續 AI 生成填入。 |
+| `src/generator/draft_builder.py` | **Draft JSON 鷹架建構器**。讀取 `capability_profile.json`、`endpoints.json`、`error_codes.json`、`vendor_master_checklist.json`，組合出 Codex 工作用的 draft 檔。包含：endpoint 角色推斷（authentication / bet / settlement / rollback 等）、前置條件撰寫模板、備註撰寫規則、`generation_mapping`（category → XMind section 對應表、mandatory / capability-specific categories、case routing fields）、pending user questions。`test_cases` 欄位留空，等後續 AI 生成填入。 |
 
 ## 安裝方式
 
@@ -230,6 +252,90 @@ python main.py doc --input Vendor_Esoterica.doc --vendor Esoterica
 
 保存來源檔案名稱、大小與修改時間。Doc reader 會用這個檔案判斷來源是否已處理過；如果來源檔沒有變更，重複執行時會略過重建。
 
+## PDF Reader 執行方式
+
+PDF Reader 是 Vendor API 文件的補充讀取器。主要來源仍然是 DOC/HTML reader 產生的 `new_vendor_detail/<Vendor>/` 檔案。
+
+PDF Reader 適合用在 Vendor 額外提供 API spec PDF，而且 Codex 需要補查 endpoint 細節時。
+
+執行範例：
+
+```bash
+python main.py pdf --pdf EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
+```
+
+也可以指定完整 PDF 路徑：
+
+```bash
+python main.py pdf --pdf C:\Users\Shan\Workspace2\Xmind_Reader\EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
+```
+
+預設輸出：
+
+```text
+new_vendor_detail/<Vendor>/vendor_pdf/
+```
+
+如果 `--output` 指到 `vendor_pdf` 結尾，程式會直接使用該資料夾：
+
+```bash
+python main.py pdf --pdf Vendor_API.pdf --vendor NewVendor --output new_vendor_detail/NewVendor/vendor_pdf
+```
+
+## PDF Reader 輸出檔案說明
+
+`new_vendor_detail/<Vendor>/vendor_pdf/validation_report.json`
+
+PDF 讀取前的驗證報告，包含：
+
+- readable
+- ocr_required
+- page_count
+- total_text_length
+- avg_text_length_per_page
+- status
+
+如果 PDF 是圖片或掃描檔：
+
+- 不讀取 PDF 內容
+- 不產生 `endpoint_index.json`
+- 不產生 `sections/*.json`
+- 只產生 validation report 與 manifest
+- log 會明確提示 OCR required，但 OCR 不在目前範圍內
+
+`new_vendor_detail/<Vendor>/vendor_pdf/manifest.json`
+
+PDF reader 的入口檔案，讓 Codex 知道這份 PDF 是否可讀、總共有多少 endpoint / section，以及有哪些輸出檔。
+
+`new_vendor_detail/<Vendor>/vendor_pdf/endpoint_index.json`
+
+Codex 查 PDF 補充資料時應該先讀的索引。它會列出 endpoint、method、section file、keywords、confidence。Codex 應該依這個檔案決定要讀哪個 section JSON。
+
+`new_vendor_detail/<Vendor>/vendor_pdf/sections/*.json`
+
+依 API endpoint 切分的 section chunks。這裡不產生 `page_001.json`、`page_002.json`，避免 100 頁 PDF 變成 100 個碎檔。
+
+`new_vendor_detail/<Vendor>/vendor_pdf/full_text.md`
+
+完整 PDF Markdown，僅供除錯或 fallback。Codex 不應該優先讀它，除非 `endpoint_index.json` 或 section chunks 不足以判斷。
+
+## Codex 閱讀順序
+
+新 Vendor 產生測項時，建議 Codex 依序讀：
+
+1. `output/<Vendor>/draft_test_cases.json`
+2. `new_vendor_detail/<Vendor>/capability_profile.json`
+3. `new_vendor_detail/<Vendor>/endpoints.json`
+4. `new_vendor_detail/<Vendor>/error_codes.json`
+5. 必要時才讀 `new_vendor_detail/<Vendor>/api_summary.md`
+6. 如果 DOC/HTML 資訊不足，再讀 `new_vendor_detail/<Vendor>/vendor_pdf/manifest.json`
+7. 再讀 `new_vendor_detail/<Vendor>/vendor_pdf/endpoint_index.json`
+8. 依 `endpoint_index.json` 只讀需要的 `vendor_pdf/sections/*.json`
+9. 除錯時才讀 `raw_doc.json`
+10. 除錯或 fallback 時才讀 `vendor_pdf/full_text.md`
+
+重點：PDF Reader 是補充來源。Codex 應以 DOC/HTML reader output 作為主要來源。
+
 ## Draft JSON 建立方式
 
 當 `new_vendor_detail/<Vendor>/` 已經建立完成後，可以建立給 Codex 使用的新測項 draft JSON：
@@ -274,11 +380,15 @@ AI 不應該一開始讀取完整 raw JSON。
 
 New Vendor 流程建議：
 
-1. 讀 `new_vendor_detail/<Vendor>/api_summary.md`
-2. 讀 `endpoints.json`
-3. 讀 `error_codes.json`
-4. 讀 `capability_profile.json`
-5. 再對照既有 `xmind_detail/<Vendor or capability knowledge>/modules/*.json`
+1. 先讀 `output/<Vendor>/draft_test_cases.json`
+2. 讀 `new_vendor_detail/<Vendor>/capability_profile.json`
+3. 讀 `new_vendor_detail/<Vendor>/endpoints.json`
+4. 讀 `new_vendor_detail/<Vendor>/error_codes.json`
+5. 必要時才讀 `new_vendor_detail/<Vendor>/api_summary.md`
+6. DOC/HTML 資訊不足時，才讀 `new_vendor_detail/<Vendor>/vendor_pdf/manifest.json` 與 `endpoint_index.json`
+7. 依 `endpoint_index.json` 只讀必要的 `vendor_pdf/sections/*.json`
+8. 再對照既有 `xmind_detail/<Vendor or capability knowledge>/modules/*.json`
+9. 除錯時才讀 `raw_doc.json` 或 `vendor_pdf/full_text.md`
 
 ## AI Token 優化策略
 
@@ -291,10 +401,17 @@ New Vendor 流程建議：
 
 ## 未來擴充方向
 
-- 強化 doc reader 對 Confluence 表格的 endpoint request / response 欄位歸類。
-- 增加人工可編輯的 capability profile override。
-- 加入 new vendor test case generation，但必須明確讀取中間格式與既有 capability knowledge。
-- 支援更多文件來源，例如 PDF OCR 後的 Markdown。
+詳細規格請參考 [GENERATION_PLAN.md](GENERATION_PLAN.md)。
+
+- **Test Case Map 重新分類**：將現有知識庫改為依 `parameter_validation` 與 `user_behavior` 兩大類別組織，不以 endpoint 資料夾分類。
+- **Capability 驅動的預期結果**：測試案例的 expected results 依 `capability_profile.json` 決定（如 multiple_bets、rollback_settlements 等）。
+- **Test Case Generator（Step 2）**：讓 Codex 讀取 draft JSON + 現有知識 chunks，將產生的案例寫回 `test_cases` 陣列，不直接輸出 XMind。
+- **XMind Writer（Step 3）**：將驗證過的 draft JSON 轉換為 `<Vendor>_test_cases.xmind`，保留現有 reader 可讀的結構。
+- **Generation Mapping**：在 draft JSON 中寫入 category → XMind section 對應表，讓 Codex 產生前先知道每個案例該放哪裡。
+- **Endpoint Role 分類**：每個 endpoint 必須有明確角色（authentication / bet / settlement / rollback 等）才能產生案例。
+- **強化 doc reader**：改善 Confluence 表格的 endpoint request / response 欄位歸類。
+- **Capability profile override**：增加人工可編輯的 override 機制。
+- **更多文件來源**：例如 PDF OCR 後的 Markdown。
 
 ## 已知限制
 
