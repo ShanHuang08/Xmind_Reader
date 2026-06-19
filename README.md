@@ -2,7 +2,7 @@
 
 ## 專案目的
 
-本專案有四個資料整理流程：
+本專案有五個資料整理流程：
 
 1. `input_xmind/` -> `xmind_detail/`
    讀取已整理好的 XMind 測試案例知識庫，輸出給 Codex/AI 閱讀的 JSON、Markdown。
@@ -10,60 +10,47 @@
 2. `new_vendor_source/` -> `new_vendor_detail/`
    讀取新 Vendor 的 Confluence 匯出 Word/HTML 文件，先整理成 Codex 好閱讀的中間格式，例如 API summary、endpoints、error codes、capability profile。
 
-3. PDF -> `new_vendor_detail/<Vendor>/vendor_pdf/`
+3. URL -> `new_vendor_detail/<Vendor>/vendor_url/`
+   讀取 Vendor 提供的 API 文件網址（或手動匯出的 HTML），產生可供 Codex 補充查詢的 validation report、endpoint index、API section chunks 與 full text Markdown。支援靜態抓取 + Playwright browser fallback，也能自動偵測 OpenAPI JSON schema。URL Reader 是次要參考來源，不是主要生成來源。
+
+4. PDF -> `new_vendor_detail/<Vendor>/vendor_pdf/`
    讀取 Vendor 額外提供的 PDF API 文件，產生可供 Codex 補充查詢的 validation report、endpoint index、API section chunks 與 full text Markdown。PDF Reader 是次要參考來源，不是主要生成來源。
 
-4. `new_vendor_detail/` -> `output/`
+5. `new_vendor_detail/` -> `output/`
    根據已整理好的 Vendor 中間格式，產生 Codex 工作用的 draft JSON 鷹架，準備給後續 AI 生成測試案例使用。
 
 根目錄的 `output/` 保留給 AI 產生完成的新 Vendor 測試案例，例如 `newvendor_test_case.xmind`，不再放 XMind reader 的知識庫輸出。
 
 本專案目前仍不是 AI 測試案例產生器。它只負責抽取、正規化、分類、切分與輸出知識。
 
-## 專案架構
 
-```text
-input_xmind/
-new_vendor_source/
-new_vendor_detail/
-  <Vendor>/
-    api_summary.md
-    endpoints.json
-    error_codes.json
-    capability_profile.json
-    vendor_master_checklist.json
-    raw_doc.json
-    source_meta.json
-    vendor_pdf/
-      manifest.json
-      validation_report.json
-      endpoint_index.json
-      full_text.md
-      sections/
-xmind_detail/
-  <Vendor>/
-    summary/
-    modules/
-    tags/
-    markdown/
-    raw/
-    source_meta/
-output/
-  <Vendor>/
-    draft_test_cases.json
-src/
-  parser/
-  extractor/
-  chunker/
-  exporters/
-  doc_reader/
-  pdf_reader/
-  generator/
-  xmind_reader_main.py
-  doc_reader_main.py
-  pdf_reader_main.py
-  draft_main.py
+## 安裝方式
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 ```
+
+## Codex 閱讀順序
+
+新 Vendor 產生測項時，建議 Codex 依序讀：
+
+1. `output/<Vendor>/draft_test_cases.json`
+2. `new_vendor_detail/<Vendor>/capability_profile.json`
+3. `new_vendor_detail/<Vendor>/endpoints.json`
+4. `new_vendor_detail/<Vendor>/error_codes.json`
+5. 必要時才讀 `new_vendor_detail/<Vendor>/api_summary.md`
+6. 如果 DOC/HTML 資訊不足，再讀 `new_vendor_detail/<Vendor>/vendor_pdf/manifest.json`
+7. 再讀 `new_vendor_detail/<Vendor>/vendor_pdf/endpoint_index.json`
+8. 依 `endpoint_index.json` 只讀需要的 `vendor_pdf/sections/*.json`
+9. 如果 URL 補充資料可用，讀 `new_vendor_detail/<Vendor>/vendor_url/manifest.json` 與 `endpoint_index.json`
+10. 依 `vendor_url/endpoint_index.json` 只讀需要的 `vendor_url/sections/*.json`
+11. 除錯時才讀 `raw_doc.json`
+12. 除錯或 fallback 時才讀 `vendor_pdf/full_text.md` 或 `vendor_url/full_text.md`
+
+重點：PDF Reader 與 URL Reader 是補充來源。Codex 應以 DOC/HTML reader output 作為主要來源。
+
 
 ## 各檔案功能說明
 
@@ -71,7 +58,7 @@ src/
 
 | 檔案 | 功能 |
 |---|---|
-| `main.py` | **CLI 統一入口**。提供 `xmind`、`doc`、`pdf`、`draft` 四個子命令，根據使用者選擇分別委派給對應的 `*_main.py` 執行。負責 `sys.path` 設定與引數轉發。 |
+| `main.py` | **CLI 統一入口**。提供 `xmind`、`doc`、`pdf`、`url`、`draft` 五個子命令，根據使用者選擇分別委派給對應的 `*_main.py` 執行。負責 `sys.path` 設定與引數轉發。 |
 
 ### XMind 流程 (`python main.py xmind`)
 
@@ -104,6 +91,18 @@ src/
 | `src/pdf_reader/pdf_section_chunker.py` | **API Section Chunker**。依 endpoint/API 區塊切分，不產生 `page_001.json` 這類 page-level JSON。 |
 | `src/pdf_reader/pdf_exporter.py` | **PDF 輸出模組**。輸出 `manifest.json`、`validation_report.json`、`endpoint_index.json`、`sections/*.json`、`full_text.md`。 |
 
+### URL Reader 流程 (`python main.py url`)
+
+| 檔案 | 功能 |
+|---|---|
+| `src/url_reader_main.py` | **URL Reader 流程主控制器**。負責解析 CLI 引數、執行 URL 抓取或讀取本地 HTML、自動偵測 OpenAPI JSON schema 或 HTML、建立 endpoint index（合併 PDF endpoint indexer + action indexer）、切分 section chunks，最後輸出到 `new_vendor_detail/<Vendor>/vendor_url/`。 |
+| `src/url_reader/url_fetcher.py` | **URL 抓取模組**。Windows 上優先使用 PowerShell `Invoke-WebRequest`，非 Windows 使用 `urllib`。支援 Basic Auth。如果靜態抓取失敗（401 等），自動 fallback 到 Playwright headless Chromium。也提供 `is_openapi_like()` 自動偵測 OpenAPI schema。 |
+| `src/url_reader/html_markdown_reader.py` | **HTML → Markdown 轉換**。優先使用 `BeautifulSoup` + `markdownify`（如果已安裝），否則 fallback 到內建的 `_SimpleMarkdownParser`（基於 `html.parser`）。自動清除 script/style/nav/footer 等噪音。 |
+| `src/url_reader/openapi_reader.py` | **OpenAPI JSON → Markdown 轉換**。當 URL 回傳 OpenAPI/Swagger JSON 時，將 `paths` 轉為結構化 Markdown（endpoint、method、request parameters、request body、responses 表格）。 |
+| `src/url_reader/action_indexer.py` | **Wallet Action Index 建立器**。專門偵測 action-style API 文件（`action: bet`、`action: win` 等），自動分類 role（balance / bet / settlement / rollback / bet_and_settle），補充 PDF endpoint indexer 可能漏抓的 wallet action endpoints。 |
+| `src/url_reader/url_section_chunker.py` | **URL Section Chunker**。依 endpoint index 的 `line_index` 順序切分 Markdown 為 section chunks，每段包含 api_name、method、endpoint、role、content_markdown。 |
+| `src/url_reader/url_exporter.py` | **URL 輸出模組**。輸出 `manifest.json`、`validation_report.json`、`endpoint_index.json`、`sections/*.json`、`full_text.md`。結構與 PDF reader 對齊。 |
+
 ### Draft 流程 (`python main.py draft`)
 
 | 檔案 | 功能 |
@@ -111,13 +110,61 @@ src/
 | `src/draft_main.py` | **Draft 流程主控制器**。接收 `--vendor` 必選引數，呼叫 `draft_builder` 從 `new_vendor_detail/<Vendor>/` 讀取已整理的中間格式，產生 draft JSON 到 `output/<Vendor>/draft_test_cases.json`。 |
 | `src/generator/draft_builder.py` | **Draft JSON 鷹架建構器**。讀取 `capability_profile.json`、`endpoints.json`、`error_codes.json`、`vendor_master_checklist.json`，組合出 Codex 工作用的 draft 檔。包含：endpoint 角色推斷（authentication / bet / settlement / rollback 等）、前置條件撰寫模板、備註撰寫規則、`generation_mapping`（category → XMind section 對應表、mandatory / capability-specific categories、case routing fields）、pending user questions。`test_cases` 欄位留空，等後續 AI 生成填入。 |
 
-## 安裝方式
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+## 專案架構
+
+```text
+input_xmind/
+new_vendor_source/
+new_vendor_detail/
+  <Vendor>/
+    api_summary.md
+    endpoints.json
+    error_codes.json
+    capability_profile.json
+    vendor_master_checklist.json
+    raw_doc.json
+    source_meta.json
+    vendor_pdf/
+      manifest.json
+      validation_report.json
+      endpoint_index.json
+      full_text.md
+      sections/
+    vendor_url/
+      manifest.json
+      validation_report.json
+      endpoint_index.json
+      full_text.md
+      sections/
+xmind_detail/
+  <Vendor>/
+    summary/
+    modules/
+    tags/
+    markdown/
+    raw/
+    source_meta/
+output/
+  <Vendor>/
+    draft_test_cases.json
+src/
+  parser/
+  extractor/
+  chunker/
+  exporters/
+  doc_reader/
+  pdf_reader/
+  url_reader/
+  generator/
+  xmind_reader_main.py
+  doc_reader_main.py
+  pdf_reader_main.py
+  url_reader_main.py
+  draft_main.py
 ```
+
+
 
 ## XMind 執行方式
 
@@ -319,22 +366,6 @@ Codex 查 PDF 補充資料時應該先讀的索引。它會列出 endpoint、met
 
 完整 PDF Markdown，僅供除錯或 fallback。Codex 不應該優先讀它，除非 `endpoint_index.json` 或 section chunks 不足以判斷。
 
-## Codex 閱讀順序
-
-新 Vendor 產生測項時，建議 Codex 依序讀：
-
-1. `output/<Vendor>/draft_test_cases.json`
-2. `new_vendor_detail/<Vendor>/capability_profile.json`
-3. `new_vendor_detail/<Vendor>/endpoints.json`
-4. `new_vendor_detail/<Vendor>/error_codes.json`
-5. 必要時才讀 `new_vendor_detail/<Vendor>/api_summary.md`
-6. 如果 DOC/HTML 資訊不足，再讀 `new_vendor_detail/<Vendor>/vendor_pdf/manifest.json`
-7. 再讀 `new_vendor_detail/<Vendor>/vendor_pdf/endpoint_index.json`
-8. 依 `endpoint_index.json` 只讀需要的 `vendor_pdf/sections/*.json`
-9. 除錯時才讀 `raw_doc.json`
-10. 除錯或 fallback 時才讀 `vendor_pdf/full_text.md`
-
-重點：PDF Reader 是補充來源。Codex 應以 DOC/HTML reader output 作為主要來源。
 
 ## Draft JSON 建立方式
 
@@ -387,8 +418,10 @@ New Vendor 流程建議：
 5. 必要時才讀 `new_vendor_detail/<Vendor>/api_summary.md`
 6. DOC/HTML 資訊不足時，才讀 `new_vendor_detail/<Vendor>/vendor_pdf/manifest.json` 與 `endpoint_index.json`
 7. 依 `endpoint_index.json` 只讀必要的 `vendor_pdf/sections/*.json`
-8. 再對照既有 `xmind_detail/<Vendor or capability knowledge>/modules/*.json`
-9. 除錯時才讀 `raw_doc.json` 或 `vendor_pdf/full_text.md`
+8. URL 補充資料可用時，讀 `new_vendor_detail/<Vendor>/vendor_url/manifest.json` 與 `endpoint_index.json`
+9. 依 `vendor_url/endpoint_index.json` 只讀必要的 `vendor_url/sections/*.json`
+10. 再對照既有 `xmind_detail/<Vendor or capability knowledge>/modules/*.json`
+11. 除錯時才讀 `raw_doc.json`、`vendor_pdf/full_text.md` 或 `vendor_url/full_text.md`
 
 ## AI Token 優化策略
 
@@ -419,3 +452,99 @@ New Vendor 流程建議：
 - capability profile 是規則式偵測，仍需要人工確認。
 - endpoint method 如果文件沒有清楚標示，會顯示 `unknown`。
 - Word 圖片、截圖、流程圖中的文字不會自動 OCR。
+
+## URL Reader 與 Playwright Fallback
+
+URL Reader 用於讀取 Vendor 提供的 API 文件網址，輸出位置為：
+
+```text
+new_vendor_detail/<Vendor>/vendor_url/
+  manifest.json
+  validation_report.json
+  endpoint_index.json
+  sections/
+  full_text.md
+```
+
+執行方式：
+
+```bash
+python main.py url --url https://vendor.example.com/api-docs --vendor NewVendor
+```
+
+如果文件需要 Basic Auth：
+
+```bash
+python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
+```
+
+URL Reader 的設計是：
+
+1. 先使用靜態 URL 抓取。
+2. 如果靜態抓取失敗，才自動嘗試 Playwright browser fallback。
+3. 如果 browser fallback 也失敗，才使用手動匯出的 HTML 或 PDF。
+
+Playwright fallback 是給 Codex 使用的小型備援，主要處理 Stoplight、Swagger UI、Redoc、Cloudflare Pages、JavaScript render 或 HTTPS/TLS 問題。它不需要額外 CLI 參數，也不會取代靜態 reader。
+
+如果網站無法直接讀取，可以先用瀏覽器另存 HTML，再執行：
+
+```bash
+python main.py url --html exported_vendor_doc.html --url https://vendor.example.com/api-docs --vendor NewVendor
+```
+
+`manifest.json` 和 `validation_report.json` 會記錄 `fetch_method`：
+
+- `powershell`
+- `urllib`
+- `playwright_browser_fallback`
+- `local_html`
+
+Codex 閱讀 URL 補充資料時，應先讀：
+
+1. `new_vendor_detail/<Vendor>/vendor_url/manifest.json`
+2. `new_vendor_detail/<Vendor>/vendor_url/endpoint_index.json`
+3. 需要的 `new_vendor_detail/<Vendor>/vendor_url/sections/*.json`
+
+`full_text.md` 只作為除錯或 fallback，不應優先讀取。
+
+## PDF / URL Reader 目前限制
+
+PDF Reader 目前限制：
+
+- PDF Reader 主要依賴可抽取文字；掃描版或圖片型 PDF 目前不做 OCR。
+- 如果環境沒有 `pymupdf4llm` / `PyMuPDF`，會 fallback 到 `pdfplumber`，但表格與章節切分品質可能較不穩定。
+- 從網頁列印成 PDF 的文件可能會混入頁首、頁尾、導覽列、程式碼範例與重複表格。
+- PDF 章節標題若不是 Markdown heading，reader 需要靠 regex 判斷 endpoint/action，可能漏抓特殊格式。
+- 複雜表格目前只做基本 Markdown 化，無法保證每個 request / response 欄位都能 100% 結構化。
+- `full_text.md` 仍可能很大，只應作為除錯或 fallback，不應讓 Codex 優先讀取。
+
+URL Reader 目前限制：
+
+- 靜態 URL 抓取不一定能處理 JavaScript render 的文件，例如 Stoplight、Swagger UI、Redoc。
+- Playwright browser fallback 需要本機或 Codex runtime 有可用的 Chromium browser binary。
+- 有些企業網路、憑證、代理或 Cloudflare 設定仍可能導致 URL 抓取失敗。
+- 目前不處理複雜登入流程、SSO、MFA、cookie session 保存或互動式點擊。
+- Stoplight 類文件目前主要依賴 render 後文字與 endpoint regex，尚未直接讀取底層 OpenAPI schema。
+- 如果同一個 vendor 分散在多個 URL，仍需要逐頁處理或先合併 HTML，再產生完整 index。
+- `full_text.md` 可能包含導覽列、頁面廣告或網站樣板文字，需要優先讀 `endpoint_index.json` 和 `sections/*.json`。
+
+## PDF / URL Reader 後續優化方向
+
+PDF Reader 可優化方向：
+
+- 加入 OCR 選項，支援掃描版 PDF。
+- 強化 PDF 表格解析，將 request / response parameters 輸出成更穩定的 JSON schema。
+- 增加更多 endpoint/action 偵測規則，例如 query-style、callback-style、wallet action-style。
+- 加入頁首、頁尾、導覽列、重複內容清理。
+- 建立 PDF extraction report，標記哪些 endpoint、參數表、error code 是高信心或低信心抽取。
+- 針對已知平台格式建立 parser profile，例如 Stoplight PDF、Swagger PDF、Confluence PDF。
+
+URL Reader 可優化方向：
+
+- 直接偵測並讀取 OpenAPI / Swagger JSON schema，優先於 HTML 文字解析。
+- 支援多 URL 一次輸入，將同一個 vendor 的 API docs 合併成單一 `vendor_url` index。
+- 將 request parameters、response parameters、error codes 從 section text 進一步結構化成 JSON。
+- 增加 browser fallback 的快取機制，避免同一 URL 重複啟動 Chromium。
+- 支援簡單 cookie/session 匯入，但不做複雜登入 automation。
+- 加入 source hash / fetched_at，讓 URL 文件未變更時可跳過重建。
+- 增加 URL extraction report，列出 endpoint role、參數抽取完整度、error code 抽取完整度。

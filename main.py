@@ -1,4 +1,4 @@
-"""Unified CLI entry point for XMind, document, PDF, and draft readers."""
+"""Unified CLI entry point for XMind, document, PDF, URL, and draft readers."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         description=(
-            "Build Codex-friendly knowledge files from XMind test maps or "
-            "Confluence-exported vendor documents."
+            "Build Codex-friendly knowledge files from XMind test maps, "
+            "Confluence-exported vendor documents, PDFs, or API doc URLs."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -41,6 +41,9 @@ Examples:
   Parse a supplementary vendor API PDF:
     python main.py pdf --pdf EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
 
+  Parse a supplementary vendor API URL:
+    python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
+
   Build a Codex-facing draft JSON scaffold for generation:
     python main.py draft --vendor Esoterica
 
@@ -48,14 +51,16 @@ Output folders:
   xmind reader -> xmind_detail/<Vendor>/
   doc reader   -> new_vendor_detail/<Vendor>/
   pdf reader   -> new_vendor_detail/<Vendor>/vendor_pdf/
+  url reader   -> new_vendor_detail/<Vendor>/vendor_url/
   draft builder -> output/<Vendor>/draft_test_cases.json
   output/      -> reserved for future AI-generated XMind files
 """,
     )
-    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,draft}")
+    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,url,draft}")
     _add_xmind_parser(subparsers)
     _add_doc_parser(subparsers)
     _add_pdf_parser(subparsers)
+    _add_url_parser(subparsers)
     _add_draft_parser(subparsers)
     parsed = parser.parse_args(args)
 
@@ -77,6 +82,16 @@ Output folders:
         from pdf_reader_main import main as pdf_main
 
         return pdf_main(_forward_args(parsed, names=("pdf", "vendor", "output", "log_level")))
+
+    if parsed.reader == "url":
+        from url_reader_main import main as url_main
+
+        return url_main(
+            _forward_args(
+                parsed,
+                names=("url", "html", "vendor", "username", "password", "output", "timeout", "log_level"),
+            )
+        )
 
     from draft_main import main as draft_main
 
@@ -183,6 +198,44 @@ Examples:
         ),
     )
     pdf.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
+
+
+def _add_url_parser(subparsers: argparse._SubParsersAction) -> None:
+    url = subparsers.add_parser(
+        "url",
+        help="Parse supplementary vendor API URLs into new_vendor_detail/<Vendor>/vendor_url/",
+        description=(
+            "Parse a supplementary vendor API URL into validation, Markdown, endpoint index, "
+            "and API section chunks. DOC/HTML output remains the primary source."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
+  python main.py url --url https://vendor.example.com/openapi.json --vendor NewVendor
+  python main.py url --html exported_vendor_doc.html --url https://vendor.example.com/api-docs --vendor NewVendor
+  python main.py url --url https://vendor.example.com/api-docs --vendor NewVendor --output new_vendor_detail
+""",
+    )
+    url.add_argument("--url", default="", help="Vendor API document URL.")
+    url.add_argument("--html", default="", help="Local HTML file exported from a vendor API document page.")
+    url.add_argument(
+        "--vendor",
+        default="",
+        help="Vendor folder name. If omitted, inferred from URL host.",
+    )
+    url.add_argument("--username", default="", help="Optional HTTP Basic Auth username.")
+    url.add_argument("--password", default="", help="Optional HTTP Basic Auth password.")
+    url.add_argument(
+        "--output",
+        default="new_vendor_detail",
+        help=(
+            "Output root folder or direct vendor_url folder. Default: new_vendor_detail. "
+            "If the path ends with vendor_url, it is used directly."
+        ),
+    )
+    url.add_argument("--timeout", type=int, default=30, help="HTTP timeout seconds. Default: 30")
+    url.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
 
 
 def _add_draft_parser(subparsers: argparse._SubParsersAction) -> None:

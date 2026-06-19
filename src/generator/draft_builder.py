@@ -97,6 +97,7 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
         "vendor_master_checklist": checklist,
         "endpoint_roles": [_endpoint_role(endpoint) for endpoint in endpoints],
         "error_codes": error_codes,
+        "supplementary_sources": _supplementary_sources(vendor_dir),
         "case_authoring_rules": _case_authoring_rules(vendor, endpoints),
         "generation_mapping": _generation_mapping(),
         "pending_user_questions": _pending_user_questions(vendor, endpoints),
@@ -218,6 +219,37 @@ def _pending_user_questions(vendor: str, endpoints: list[dict[str, Any]]) -> lis
         f"{vendor}: confirm whether test account egt260514 should be used, or provide a different test account."
     )
     return questions
+
+
+def _supplementary_sources(vendor_dir: Path) -> dict[str, Any]:
+    sources: dict[str, Any] = {}
+    for source_type, folder_name in (("pdf", "vendor_pdf"), ("url", "vendor_url")):
+        source_dir = vendor_dir / folder_name
+        manifest_path = source_dir / "manifest.json"
+        index_path = source_dir / "endpoint_index.json"
+        if not manifest_path.exists():
+            continue
+        manifest = _read_json(manifest_path)
+        index = _read_json(index_path) if index_path.exists() else []
+        sources[source_type] = {
+            "folder": str(source_dir),
+            "manifest": str(manifest_path),
+            "endpoint_index": str(index_path) if index_path.exists() else "",
+            "total_endpoints": manifest.get("total_endpoints", len(index)),
+            "total_sections": manifest.get("total_sections", 0),
+            "usage": "Read manifest and endpoint_index first, then load only selected sections/*.json.",
+            "endpoints": [
+                {
+                    "api_name": item.get("api_name", ""),
+                    "method": item.get("method", ""),
+                    "endpoint": item.get("endpoint", ""),
+                    "role": item.get("role", ""),
+                    "section_file": item.get("section_file", ""),
+                }
+                for item in index
+            ],
+        }
+    return sources
 
 
 def _has_game_code_hint(endpoints: list[dict[str, Any]]) -> bool:

@@ -45,13 +45,24 @@ Expected results must depend on resolved vendor capability:
 
 - If `multiple_bets=true`, same-round multiple bet scenarios should expect both bets to succeed.
 - If `multiple_bets=false`, the second bet should expect failure or rejection.
-- If `multiple_settlements=true`, multiple result/settlement cases can expect repeated settlement success.
+- If `multiple_settlements=true`, multiple result/settlement expected results must also check whether the settlement endpoint has a round-end control parameter, such as `roundCompleted`, `isEndRound`, `roundEnd`, `endRound`, or an equivalent field.
+- If `multiple_settlements=true` and the settlement endpoint has a round-end control parameter, Codex should use that parameter to decide whether the current round is still open or already closed. This changes whether a later settlement in the same round should succeed, fail, or be treated as idempotent.
+- If `multiple_settlements=true` but the settlement endpoint has no round-end control parameter, the flow is closer to debit/credit behavior: debit deducts money and credit adds money. The vendor may not have a strict round concept, so expected results should focus on transfer posting, balance change, idempotency key, and duplicate credit behavior instead of round closure.
 - If `multiple_settlements=false`, repeated settlement should expect failure or no duplicate effect.
 - If `rollback_settlements=true`, settled-bet rollback cases should be included.
-- If `rollback_settlements=false`, settled-bet rollback cases should be skipped or expected to fail.
+- If `rollback_settlements=false`, settled-bet rollback API cases must expect failure because the vendor does not support rolling back settled bets.
 - If `cancel_bet=true`, refund/cancel unsettled bet cases should be included.
 - If `modify_settlements_adjustment=true`, adjustment cases should be included.
 - Idempotency support affects transaction/reference duplicate scenarios.
+
+Error code selection rules:
+
+- Every generated expected result must include the expected vendor error code for failure cases.
+- If the vendor provides complete and specific error codes, Codex should use the documented code directly and should not infer a different code.
+- If the vendor provides only a small or incomplete error code list, Codex must infer the most likely error code from the available list instead of leaving the expected result blank.
+- Inferred error codes must be marked as inferred in the draft JSON, for example `error_code_source: "inferred_from_limited_vendor_codes"`.
+- If several error codes could apply, choose the closest documented code and add a short `unresolved_questions` note for user/vendor confirmation.
+- For vendors like EGT Digital, where endpoint error code choices are limited, Codex should still pick the most suitable documented code for the negative scenario. For example, if a settlement after `roundCompleted=true` is rejected but the exact error is not documented, choose the closest non-OK status from that endpoint's documented status codes and mark it as inferred.
 
 ## Endpoint Role Notes
 
@@ -264,14 +275,28 @@ Recommended generated case fields:
 
 The generator should not write XMind directly.
 
-## Supplementary PDF Reader
+## Supplementary PDF / URL Readers
 
-PDF Reader is a secondary reference source for vendor API details. It must not replace DOC/HTML reader output as the main source for generation.
+PDF Reader and URL Reader are secondary reference sources for vendor API details. They must not replace DOC/HTML reader output as the main source for generation.
+
+Some vendors provide API documents as PDFs, while others provide web URLs. Both readers should normalize their output into the same Codex-friendly retrieval pattern so Codex can read only the relevant endpoint sections instead of loading the whole document.
 
 PDF Reader output:
 
 ```text
 new_vendor_detail/<Vendor>/vendor_pdf/
+  manifest.json
+  validation_report.json
+  endpoint_index.json
+  sections/
+    <api_section>.json
+  full_text.md
+```
+
+URL Reader output:
+
+```text
+new_vendor_detail/<Vendor>/vendor_url/
   manifest.json
   validation_report.json
   endpoint_index.json
@@ -291,6 +316,17 @@ Reader rules:
 - `full_text.md` is for debugging or fallback only.
 - Detect wallet-style endpoints such as `{baseUri}/withdraw`, `{baseUri}/reverse/withdraw`, and `{baseUri}/deposit`, not only `/api/...` URLs.
 
+URL Reader rules:
+
+- Support API documentation URLs as supplementary sources.
+- Support HTTP Basic Auth through CLI arguments.
+- Prefer static HTML extraction first.
+- Convert HTML into Markdown before endpoint indexing.
+- Detect OpenAPI/Swagger JSON URLs and convert them directly into endpoint Markdown.
+- Store source URL, final URL, content type, and content hash in `manifest.json` / `validation_report.json`.
+- Use the same endpoint role aliases and section chunking behavior as PDF Reader.
+- `full_text.md` is for debugging or fallback only.
+
 Wallet endpoint role aliases:
 
 | PDF endpoint | Generation role |
@@ -302,7 +338,7 @@ Wallet endpoint role aliases:
 | `{baseUri}/reverse/withdraw` | `rollback` |
 | `{baseUri}/deposit` | `settlement` |
 
-Codex reading order for PDF details:
+Codex reading order for PDF/URL details:
 
 1. Read `manifest.json`.
 2. Read `endpoint_index.json`.
@@ -316,7 +352,7 @@ The main Codex reading order remains:
 3. `new_vendor_detail/<Vendor>/endpoints.json`
 4. `new_vendor_detail/<Vendor>/error_codes.json`
 5. `new_vendor_detail/<Vendor>/api_summary.md` only when necessary
-6. PDF supplementary index/sections only when DOC/HTML output is not enough
+6. PDF/URL supplementary index/sections only when DOC/HTML output is not enough
 
 ## Step 3: XMind Writer
 
@@ -327,6 +363,22 @@ Once `draft_test_cases.json` is reviewed and validated, a Python XMind writer ca
 ```text
 output/<Vendor>/<Vendor>_test_cases.xmind
 ```
+
+MeterSphere compatibility must be treated as a hard requirement.
+
+Known importable XMind references:
+
+- `input_xmind/metersphere_xmind_example.xmind`
+- `input_xmind/EGTDigital_test_cases.xmind`
+- `input_xmind/Vibra_Gaming_test_case.xmind`
+
+All three files are known to import into MeterSphere successfully.
+
+Writer format priority:
+
+1. Follow `EGTDigital_test_cases.xmind` and `Vibra_Gaming_test_case.xmind` as the main production-style output references.
+2. Use `metersphere_xmind_example.xmind` as the official MeterSphere template reference.
+3. Do not invent a new XMind structure unless MeterSphere compatibility has been validated again.
 
 The writer should preserve the same structure expected by the existing XMind reader:
 
@@ -339,6 +391,91 @@ The writer should preserve the same structure expected by the existing XMind rea
 - priority
 - steps
 - expected results
+
+Generated XMind validation should include:
+
+- Re-read the generated XMind with this project's XMind reader.
+- Compare generated case count with `draft_test_cases.json`.
+- Verify case ID, scenario, preconditions, remarks, steps, and expected results are not lost.
+- Verify hierarchy matches the fixed QA-facing output structure.
+- Compare topic/field style against the known MeterSphere-importable reference files.
+- Produce a validation report before the file is treated as ready for MeterSphere import.
+
+### MeterSphere Format Knowledge
+
+Before implementing the XMind writer, the project should extract and preserve MeterSphere-compatible format knowledge from the known importable XMind files.
+
+Recommended output:
+
+```text
+xmind_detail/_metersphere_profile/
+  metersphere_schema_profile.json
+```
+
+The profile should describe:
+
+- supported sheet/root topic structure
+- fixed QA-facing hierarchy
+- case topic naming style
+- where preconditions are stored
+- where remarks are stored
+- how steps and expected results are paired
+- how labels, markers, and priority are represented
+- maximum useful hierarchy depth
+- example topic paths from the golden reference files
+
+Purpose:
+
+- The XMind writer should follow this profile instead of guessing MeterSphere's import format.
+- The validator should compare generated files against this profile.
+- If MeterSphere import behavior changes later, update the profile/validator rules before changing generation logic.
+
+### Draft Schema Constraints
+
+`draft_test_cases.json` should become the strict input contract for the future XMind writer.
+
+Each generated test case should use structured fields, not only free text:
+
+```json
+{
+  "id": "TC_001",
+  "output_section": "User Behavior > Bet and Settle",
+  "module": "Bet and Settle",
+  "category": "multiple_bets",
+  "scenario": "Place two bets in the same round",
+  "preconditions": "前置条件：\n...",
+  "steps": [
+    {
+      "step": "Call bet endpoint with transactionId A.",
+      "expected": "Return success."
+    }
+  ],
+  "remarks": "备注：\n...",
+  "expected_error": {
+    "code": "ERR_xxx",
+    "source": "documented"
+  },
+  "source_reference": {
+    "vendor_doc": [],
+    "xmind_reference_cases": []
+  },
+  "unresolved_questions": []
+}
+```
+
+Draft validation rules:
+
+- `id` must exist and be unique.
+- `output_section` must match the generated XMind mapping table.
+- `scenario` must not be empty.
+- `preconditions` must be present and keep the `前置条件：` label.
+- `remarks` must be present and keep the `备注：` label.
+- `steps` must not be empty.
+- Each step must have a paired expected result.
+- Failure/negative cases must include an expected error code.
+- Inferred error codes must include their inference source.
+- `source_reference` should preserve which vendor doc and XMind cases were used.
+- Cases with unresolved questions should not be marked as final unless the uncertainty is intentionally accepted.
 
 ## Recommended Operating Modes
 

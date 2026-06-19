@@ -1,4 +1,4 @@
-"""Export supplementary PDF reader outputs."""
+"""Export supplementary URL reader outputs."""
 
 from __future__ import annotations
 
@@ -37,8 +37,7 @@ def export_sections(sections: list[dict[str, Any]], output_dir: Path) -> list[Pa
     paths = []
     used_names: dict[str, int] = {}
     for section in sections:
-        name = _section_filename(section, used_names)
-        path = sections_dir / name
+        path = sections_dir / _section_filename(section, used_names)
         _write_json(path, section)
         paths.append(path)
     return paths
@@ -46,7 +45,8 @@ def export_sections(sections: list[dict[str, Any]], output_dir: Path) -> list[Pa
 
 def export_manifest(
     vendor: str,
-    source_pdf: str,
+    source_url: str,
+    final_url: str,
     validation: dict[str, Any],
     endpoint_count: int,
     section_count: int,
@@ -54,10 +54,14 @@ def export_manifest(
 ) -> Path:
     manifest = {
         "vendor": vendor,
-        "source_pdf": source_pdf,
-        "reader": validation.get("reader", "pymupdf4llm"),
+        "source_url": source_url,
+        "final_url": final_url,
+        "reader": "url_reader",
         "readable": validation.get("readable", False),
-        "ocr_required": validation.get("ocr_required", True),
+        "requires_auth": validation.get("requires_auth", False),
+        "content_type": validation.get("content_type", ""),
+        "content_sha256": validation.get("content_sha256", ""),
+        "fetch_method": validation.get("fetch_method", ""),
         "total_sections": section_count,
         "total_endpoints": endpoint_count,
         "files": {
@@ -66,7 +70,7 @@ def export_manifest(
             "full_text": "full_text.md" if validation.get("readable") else "",
             "sections_dir": "sections/" if section_count else "",
         },
-        "usage_note": "PDF reader output is supplementary. Main source is DOC/HTML reader output.",
+        "usage_note": "URL reader output is supplementary. Main source is DOC/HTML reader output.",
     }
     path = output_dir / "manifest.json"
     _write_json(path, manifest)
