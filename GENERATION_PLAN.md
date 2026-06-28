@@ -1,6 +1,23 @@
 # New Vendor Test Case Generation Plan
 
-This project currently prepares source knowledge for Codex. It does not yet generate final new vendor XMind test cases automatically.
+This project prepares source knowledge for Codex and can now generate API parameter validation XMind test cases automatically.
+
+Current implemented generation flow:
+
+```text
+new_vendor_detail/<Vendor>/
+  -> output/<Vendor>/draft_test_cases.json
+  -> output/<Vendor>/<Vendor>_test_cases.xmind
+  -> output/<Vendor>/<Vendor>_test_cases_validation_report.json
+```
+
+The public CLI keeps generation as one command:
+
+```bash
+python main.py generate --vendor <Vendor>
+```
+
+`generate` builds the draft JSON, generates deterministic API parameter validation cases, writes the XMind file, and re-reads the generated XMind for validation.
 
 ## Step 1: Draft JSON For Codex
 
@@ -10,6 +27,7 @@ Implemented scope:
 - Read `new_vendor_detail/<Vendor>/endpoints.json`
 - Read `new_vendor_detail/<Vendor>/error_codes.json`
 - Read `new_vendor_detail/<Vendor>/vendor_master_checklist.json`
+- Read `new_vendor_detail/<Vendor>/game_codes.json` when present, or extract game-code tables from `raw_doc.json`
 - Build `output/<Vendor>/draft_test_cases.json`
 
 The draft JSON is a working context file for Codex. It contains:
@@ -18,24 +36,25 @@ The draft JSON is a working context file for Codex. It contains:
 - vendor master checklist
 - endpoint roles
 - request and response parameter tables
+- request / success response / error response examples where available
 - endpoint-specific generation notes
 - fixed precondition and remarks rules
 - pending user questions
-- empty `test_cases` array
+- generated `test_cases` array after `generate` runs
 
-No generated test cases are created in Step 1.
+The draft remains the strict intermediate contract. The generator writes structured cases into `test_cases`; the XMind writer consumes only validated draft cases.
 
 ## Important Authoring Rules
 
 Preconditions should follow this pattern:
 
-1. Launch this vendor's gameCode.
+1. Use `launch game <gameCode>`.
 2. Use `/game/url` for launch-game fixed cases.
 3. Use the actual vendor endpoint for endpoint cases, such as `/api/v1/esoterica/result`.
-4. Use `egt260514` as the default test account unless the user confirms another account.
-5. Paste the request parameters needed by that URL or endpoint.
+4. Use the default test account generated from the vendor's first three English letters plus `YYMMDD`, such as `eso260628` for Esoterica on 2026-06-28, unless the user confirms another account.
+5. Paste the request parameters needed by that URL or endpoint, preferring request examples extracted from the vendor doc.
 
-Remarks should contain the response structure for the same URL or endpoint.
+Remarks should contain the response structure for the same URL or endpoint, preferring success/error response examples extracted from the vendor doc.
 
 Launch-game fixed cases may have different preconditions and remarks from endpoint API cases.
 
@@ -157,39 +176,43 @@ The knowledge base can be category-based, but the generated XMind should still u
 Current generated XMind structure:
 
 ```text
-API parameter test
-  <endpoint>
-    <parameter>
+功能用例
+  Regression
+    Vendor_integration
+      <Vendor>
+        API parameter test
+          <endpoint name>
+            case：check the <parameter> validation
 
-User Behavior
-  Launch Game
-    launch URL and authenticate-related cases
+        User Behavior
+          Launch Game
+            launch URL and authenticate-related cases
 
-  Get Player balance
-    balance endpoint cases
+          Get Player balance
+            balance endpoint cases
 
-  Bet and Settle
-    bet
-    settlement
-    betAndSettle
-    amount precision
-    multiple bets
-    multiple settlements
-    freespin settlement
-    jackpot settlement
-    settlement idempotency
+          Bet and Settle
+            bet
+            settlement
+            betAndSettle
+            amount precision
+            multiple bets
+            multiple settlements
+            freespin settlement
+            jackpot settlement
+            settlement idempotency
 
-  Cancel Bet
-    rollback
-    rollback bet
-    rollback settled bet
-    rollback betAndSettle
+          Cancel Bet
+            rollback
+            rollback bet
+            rollback settled bet
+            rollback betAndSettle
 
-  Game type
-    Slots
-    Arcade game
-    Mini game
-    Crash game
+          Game type
+            Slots
+            Arcade game
+            Mini game
+            Crash game
 ```
 
 This means generation needs two different classifications:
@@ -197,14 +220,17 @@ This means generation needs two different classifications:
 - `category`: how Codex selects reference knowledge
 - `output_section`: where the final test case should be placed in the generated XMind
 
-Recommended generated case routing fields:
+Generated case routing fields:
 
 ```json
 {
   "category": "multiple_bets",
   "output_section": "User Behavior > Bet and Settle",
   "endpoint_group": "bet",
-  "endpoints": ["/api/v1/vendor/bet"]
+  "endpoint": "/api/v1/vendor/bet",
+  "endpoint_name": "bet",
+  "endpoints": ["/api/v1/vendor/bet"],
+  "parameter": "amount"
 }
 ```
 
@@ -241,7 +267,18 @@ This mapping should also be written into `draft_test_cases.json` as `generation_
 
 ## Step 2: Test Case Generator
 
-Future direction, not implemented yet.
+Implemented for API parameter validation.
+
+Current implemented scope:
+
+- `python main.py generate --vendor <Vendor>` builds the draft and writes generated cases back into `test_cases`.
+- API parameter validation is deterministic and generated from `endpoint_roles[].request_parameters`.
+- Generated API parameter cases are routed to `API parameter test > <endpoint_name>`.
+- Each parameter case uses the scenario format `case：check the <parameter> validation`.
+- Preconditions prefer `endpoint.request_example`; otherwise the generator derives normal values from parameter name, type, and description.
+- Remarks prefer `endpoint.success_response_example` and `endpoint.error_response_example`.
+- Step expected results include a parameter validation error message and an error response JSON block.
+- User Behavior generation is still pending and should be driven by scenario templates/reference cases.
 
 The generator should let Codex read:
 
@@ -254,7 +291,7 @@ The generator should let Codex read:
   - `new_vendor_detail/<Vendor>/vendor_pdf/endpoint_index.json`
   - selected `new_vendor_detail/<Vendor>/vendor_pdf/sections/*.json`
 
-Codex should then write generated cases back into the draft JSON under `test_cases`.
+Codex/generator should then write generated cases back into the draft JSON under `test_cases`.
 
 Recommended generated case fields:
 
@@ -274,6 +311,206 @@ Recommended generated case fields:
 - unresolved_questions
 
 The generator should not write XMind directly.
+
+## User Behavior Test Case Generation
+
+This section documents what is needed to move from the current parameter-validation-only generator to full User Behavior test case generation.
+
+### Current State: Implemented vs Pending
+
+| Item | Parameter Validation (Implemented) | User Behavior (Pending) |
+|---|---|---|
+| Source data | `endpoint_roles[].request_parameters` | `xmind_detail` reference cases + `capability_profile` + `endpoints` |
+| Generation method | Fully deterministic (each param → doesn't set / blank / wrong value) | Needs **template + substitution** from reference cases |
+| Case structure | Single endpoint, single parameter, pure negative | **Multi-step business flow** (bet → settle → check history) |
+| Expected result | Fixed error code template | **Capability-dependent** (e.g. `multiple_bets=true` → both bets succeed) |
+| Error code selection | One generic parameter error code | **Per-scenario error codes** (insufficient balance, duplicate request, etc.) |
+
+### 6 Missing Requirements
+
+#### Requirement 1: Scenario Templates (XMind-driven)
+
+Instead of hardcoding scenario templates in Python, use a **manually maintained Scenario Templates XMind file** as the single source of truth.
+
+**Workflow:**
+
+```text
+Manually write scenario_templates.xmind (category-driven, capability-aware)
+    ↓  (xmind_reader pipeline - already implemented)
+Decompose into JSON chunks + Markdown
+    ↓  (stored in xmind_detail/scenario_templates/)
+Generator reads chunks + capability_profile.supports
+    ↓
+Select mandatory cases + capability-specific cases
+    ↓
+Substitute new vendor's endpoint, gameCode, amount, etc.
+    ↓
+Write into draft_test_cases.json
+```
+
+**XMind structure design:**
+
+```text
+Scenario Templates
+├── Mandatory                              ← always generated, regardless of capabilities
+│   ├── Launch Game
+│   │   ├── case：successful launch game
+│   │   ├── case：wrong gameCode
+│   │   └── case：unsupported currency
+│   ├── Balance
+│   │   └── case：check player balance
+│   ├── Bet
+│   │   ├── case：normal bet (win)
+│   │   ├── case：normal bet (lose)
+│   │   └── case：insufficient balance
+│   ├── Settlement
+│   │   └── ...
+│   ├── Rollback
+│   │   └── ...
+│   └── Amount Precision
+│       └── ...
+├── Capability: multiple_bets              ← only selected when supports.multiple_bets=true
+│   ├── case：two bets same round both succeed
+│   └── case：two bets same round second rejected
+├── Capability: multiple_settlements
+│   └── ...
+├── Capability: rollback_settlements
+│   └── case：rollback settled bet
+├── Capability: cancel_bet
+│   └── case：cancel unsettled bet
+├── Capability: bet_and_settle
+│   └── case：full bet+settle flow
+├── Capability: modify_settlements_adjustment
+│   └── ...
+├── Capability: free_spin
+│   └── ...
+├── Capability: jackpot
+│   └── ...
+```
+
+**Output folder (already created, empty, waiting for XMind):**
+
+```text
+xmind_detail/scenario_templates/
+  markdown/         ← decomposed markdown per module
+  modules/          ← decomposed JSON chunks per module
+  raw/              ← raw extraction output
+  source_meta/      ← source metadata
+  summary/          ← extraction report and summary
+  tags/             ← tag-based JSON chunks
+```
+
+**Generator-side selection logic (to implement in a new `template_loader.py` or extend `reference_selector.py`):**
+
+1. Read `xmind_detail/scenario_templates/modules/*.json`
+2. Filter: all cases under `Mandatory` are always selected; cases under `Capability: xxx` are selected only when `capability_profile.supports[xxx] == true`
+3. For each selected case, substitute placeholders with the new vendor's `endpoint_roles`, `game_codes`, `error_codes` values
+4. Expected results are derived by logical inference from capability profile + error code mapping
+
+**Benefits over hardcoding:**
+
+- QA can edit templates directly in XMind without touching Python code
+- Reuses the existing xmind_reader pipeline (no new parsing code)
+- Mandatory vs capability-specific is expressed naturally through XMind hierarchy
+- Adding a new category (e.g. `crash_game`) only requires adding XMind nodes
+- Requirement 2 (Reference Case Loader) is naturally solved because templates are already abstracted reference cases
+
+#### Requirement 2: Reference Case Loader
+
+`reference_selector.py` currently does **filename matching only** (stem contains category term) and returns file paths. Missing:
+
+- **Read** the selected JSON chunk content (`modules/*.json`, `tags/*.json`)
+- **Abstract**: replace vendor-specific values (gameCode, endpoint, transactionId, amount) with placeholders
+- **Deduplicate**: same category may have multiple vendor reference cases; select the most representative canonical cases (filter out `duplicate_of` entries)
+
+For example, `bet_and_settle.json` contains 39 cases, but many are `duplicate_of` duplicates — only the canonical ones should be used as templates.
+
+#### Requirement 3: Capability-Driven Error Code Selection
+
+`case_generation_context.py` currently only extracts `parameter_error`. Business-logic error selection is missing:
+
+```python
+# Currently only this exists
+"parameter_error": _select_parameter_error(error_codes)
+
+# Still needed
+"bet_not_allowed_error": _select_error(error_codes, "bet not allowed")
+"insufficient_balance_error": _select_error(error_codes, "insufficient")
+"duplicate_request_error": _select_error(error_codes, "duplicate")
+"player_not_found_error": _select_error(error_codes, "player not found")
+"game_not_found_error": _select_error(error_codes, "game not found")
+```
+
+Additionally, `GENERATION_PLAN.md` explicitly requires: expected results must depend on `capability_profile.supports` (e.g. `multiple_bets=true` → second bet succeeds, `false` → second bet fails).
+
+#### Requirement 4: Multi-Step Flow Builder
+
+Parameter validation steps are flat:
+
+```text
+step: "userId doesn't set\n//userId=xxx"
+expected: "Error code is 7"
+```
+
+User Behavior requires **multi-step flows**, e.g. bet_and_settle:
+
+```text
+steps: [
+  "the player betAmount 50",           # bet endpoint
+  "Settle the bet, winAmount 100",     # settlement endpoint
+  "check in Game Bet History",         # DB check
+  "Check vendor requestBody of bet",   # API log check
+  "Check vendor responseBody of bet",
+  ...
+]
+```
+
+This requires knowing:
+
+- Which endpoints participate in the flow (resolved from `endpoint_roles` by role)
+- How to compose request payloads for each endpoint
+- Data flow between steps (bet `transactionId` → settlement `transactionId`)
+
+#### Requirement 5: Category → Endpoint Reverse Mapping
+
+`ENDPOINT_ROLE_RULES` maps `endpoint path → role`. User Behavior generation needs the **reverse**:
+
+- `launch_game` category → needs `/game/url` (not in endpoint list; it is a front-end URL)
+- `balance` category → find role=`balance_check` or role=`authentication` (authenticate also returns balance)
+- `bet` category → find role=`bet` endpoint
+- `settlement` category → find role=`settlement` or role=`combined_bet_settlement` endpoint
+- `rollback` category → find role=`cancel_bet` or role=`rollback` endpoint
+- `bet_and_settle` → needs bet endpoint + settlement endpoint together
+
+This reverse lookup logic does not exist yet.
+
+#### Requirement 6: Draft Validator Extension for User Behavior
+
+`draft_validator.py` currently enforces strict scenario format for API parameter test (`"case：check the {parameter} validation"`), but User Behavior scenario formats are undefined:
+
+- What should a launch_game scenario look like?
+- What should a bet_and_settle scenario look like?
+- How to validate step/expected correspondence in multi-step cases?
+
+### Implementation Path
+
+Recommended order:
+
+```text
+Requirement 1: Scenario Templates XMind (manually write, then decompose via xmind_reader)
+    ↓
+Requirement 5: Category → Endpoint reverse mapping (find the correct endpoints)
+    ↓
+Requirement 3: Capability-Driven Error Selection (decide success/failure + error codes by capability)
+    ↓
+Requirement 4: Multi-Step Flow Builder (compose endpoint payloads into multi-step flows)
+    ↓
+Requirement 6: Validator extension (add User Behavior validation rules)
+```
+
+Note: Requirement 2 (Reference Case Loader) is naturally resolved by Requirement 1 — the scenario templates XMind, once decomposed, already serves as the abstracted reference cases.
+
+**Blocking dependency:** Python code changes (template_loader.py, reverse mapping, error selection, flow builder, validator) must wait until the scenario templates XMind is complete and decomposed into `xmind_detail/scenario_templates/`. No Python code should be written before the XMind template is ready.
 
 ## Supplementary PDF / URL Readers
 
@@ -356,15 +593,24 @@ The main Codex reading order remains:
 
 ## Step 3: XMind Writer
 
-Future direction, not implemented yet.
+Implemented for generated draft cases.
 
-Once `draft_test_cases.json` is reviewed and validated, a Python XMind writer can convert it into:
+Once `draft_test_cases.json` is generated and validated, the Python XMind writer converts it into:
 
 ```text
 output/<Vendor>/<Vendor>_test_cases.xmind
 ```
 
 MeterSphere compatibility must be treated as a hard requirement.
+
+Current implemented scope:
+
+- Writes XMind archives with `content.json`, `metadata.json`, and `manifest.json`.
+- Uses metadata format compatible with the Xmind desktop app (`creator` is an object with `name` and `version`).
+- Uses the fixed root path `功能用例 > Regression > Vendor_integration > <Vendor>`.
+- Places API parameter cases under `API parameter test > <endpoint_name>`.
+- Re-reads generated XMind files with this project's XMind reader.
+- Writes `<Vendor>_test_cases_validation_report.json`.
 
 Known importable XMind references:
 
@@ -432,7 +678,7 @@ Purpose:
 
 ### Draft Schema Constraints
 
-`draft_test_cases.json` should become the strict input contract for the future XMind writer.
+`draft_test_cases.json` is the strict input contract for the XMind writer.
 
 Each generated test case should use structured fields, not only free text:
 
@@ -465,7 +711,7 @@ Each generated test case should use structured fields, not only free text:
 
 Draft validation rules:
 
-- `id` must exist and be unique.
+- `id` is optional before MeterSphere upload. If present, it must be unique.
 - `output_section` must match the generated XMind mapping table.
 - `scenario` must not be empty.
 - `preconditions` must be present and keep the `前置条件：` label.
@@ -481,12 +727,13 @@ Draft validation rules:
 
 Run Mode:
 
-- Do not modify Python code.
-- Execute existing readers and builders.
-- Read generated JSON/Markdown.
-- Produce or update draft JSON.
+- Execute existing readers, draft builder, generator, XMind writer, and validator.
+- Read generated JSON/Markdown only when review or debugging is needed.
+- Produce or update `draft_test_cases.json`, `<Vendor>_test_cases.xmind`, and the validation report.
+- Do not change Python code unless the current vendor exposes a parsing, mapping, validation, or export defect.
 
 Improve Mode:
 
 - Modify Python code only when parsing, mapping, validation, or export behavior is wrong.
 - Re-run readers to regenerate intermediate files.
+- Re-run `python main.py generate --vendor <Vendor>` and confirm the XMind validator report is valid.

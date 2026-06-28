@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import date
 from pathlib import Path
 from typing import Any
+
+
+FALLBACK_GAME_CODES = {
+    "Esoterica": "ESOTERICA_burningSlot5",
+}
 
 
 ENDPOINT_ROLE_RULES = {
@@ -77,6 +84,8 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
     error_codes = _read_json(vendor_dir / "error_codes.json")
     checklist_path = vendor_dir / "vendor_master_checklist.json"
     checklist = _read_json(checklist_path) if checklist_path.exists() else []
+    game_codes_path = vendor_dir / "game_codes.json"
+    game_codes = _read_json(game_codes_path) if game_codes_path.exists() else _extract_game_codes_from_raw(vendor_dir)
 
     draft = {
         "schema_version": "draft-test-cases/v1",
@@ -95,12 +104,13 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
         },
         "capability_profile": capability_profile,
         "vendor_master_checklist": checklist,
+        "game_codes": game_codes,
         "endpoint_roles": [_endpoint_role(endpoint) for endpoint in endpoints],
         "error_codes": error_codes,
         "supplementary_sources": _supplementary_sources(vendor_dir),
-        "case_authoring_rules": _case_authoring_rules(vendor, endpoints),
+        "case_authoring_rules": _case_authoring_rules(vendor, endpoints, game_codes),
         "generation_mapping": _generation_mapping(),
-        "pending_user_questions": _pending_user_questions(vendor, endpoints),
+        "pending_user_questions": _pending_user_questions(vendor, game_codes),
         "test_cases": [],
     }
 
@@ -127,6 +137,9 @@ def _endpoint_role(endpoint: dict[str, Any]) -> dict[str, Any]:
         "generation_note": generation_note,
         "request_parameters": endpoint.get("request_parameters", []),
         "response_parameters": endpoint.get("response_parameters", []),
+        "request_example": endpoint.get("request_example", {}),
+        "success_response_example": endpoint.get("success_response_example", {}),
+        "error_response_example": endpoint.get("error_response_example", {}),
     }
 
 
@@ -136,13 +149,17 @@ def _infer_role(endpoint_path: str) -> str:
     return ENDPOINT_ROLE_RULES.get(last, "supporting_endpoint")
 
 
-def _case_authoring_rules(vendor: str, endpoints: list[dict[str, Any]]) -> dict[str, Any]:
+def _case_authoring_rules(
+    vendor: str, endpoints: list[dict[str, Any]], game_codes: list[dict[str, Any]]
+) -> dict[str, Any]:
     endpoint_paths = [item.get("endpoint", "") for item in endpoints]
+    game_code = _resolved_game_code(vendor, game_codes)
+    default_test_account = _default_test_account(vendor)
     return {
         "precondition_template": [
-            "1. launch this vendor's gameCode. If the vendor doc does not mention a gameCode, ask the user which gameCode/account should be used.",
+            "1. launch game <gameCode>. If the vendor doc does not mention a gameCode, ask the user which gameCode should be used.",
             "2. url : use /game/url for launch-game fixed cases; otherwise use the target vendor endpoint.",
-            "3. test account: egt260514 unless the user confirms a different vendor-specific account.",
+            f"3. test account: {default_test_account} unless the user confirms a different vendor-specific account.",
             "API request parameters:",
             "Paste the request fields required by the target url/endpoint.",
         ],
@@ -157,7 +174,10 @@ def _case_authoring_rules(vendor: str, endpoints: list[dict[str, Any]]) -> dict[
             "Idempotency behavior affects transaction/reference-related scenarios.",
         ],
         "known_endpoint_paths": endpoint_paths,
-        "default_test_account": "egt260514",
+        "default_test_account": default_test_account,
+        "default_test_account_rule": "first 3 English letters of vendor name in lowercase + YYMMDD",
+        "default_game_code": game_code,
+        "game_code_source": _game_code_source(vendor, game_codes),
         "vendor": vendor,
     }
 
@@ -209,14 +229,15 @@ def _generation_mapping() -> dict[str, Any]:
     }
 
 
-def _pending_user_questions(vendor: str, endpoints: list[dict[str, Any]]) -> list[str]:
+def _pending_user_questions(vendor: str, game_codes: list[dict[str, Any]]) -> list[str]:
     questions = []
-    if not _has_game_code_hint(endpoints):
+    if not _documented_game_codes(game_codes):
         questions.append(
-            f"{vendor}: vendor doc did not provide a clear gameCode for launch-game preconditions. Please confirm which gameCode to use."
+            f"{vendor}: game code table is missing or blank. Current fallback is {_resolved_game_code(vendor, game_codes)}; please confirm which gameCode to use."
         )
+    default_test_account = _default_test_account(vendor)
     questions.append(
-        f"{vendor}: confirm whether test account egt260514 should be used, or provide a different test account."
+        f"{vendor}: confirm whether test account {default_test_account} should be used, or provide a different test account."
     )
     return questions
 
@@ -252,9 +273,70 @@ def _supplementary_sources(vendor_dir: Path) -> dict[str, Any]:
     return sources
 
 
-def _has_game_code_hint(endpoints: list[dict[str, Any]]) -> bool:
-    text = json.dumps(endpoints, ensure_ascii=False).lower()
-    return "gamecode" in text or "game code" in text
+def _resolved_game_code(vendor: str, game_codes: list[dict[str, Any]]) -> str:
+    documented = _documented_game_codes(game_codes)
+    if documented:
+        return documented[0]
+    return FALLBACK_GAME_CODES.get(vendor, "")
+
+
+def _default_test_account(vendor: str, today: date | None = None) -> str:
+    current = today or date.today()
+    letters = "".join(re.findall(r"[A-Za-z]", vendor or "")).lower()
+    prefix = (letters[:3] or "ven").ljust(3, "x")
+    return f"{prefix}{current:%y%m%d}"
+
+
+def _game_code_source(vendor: str, game_codes: list[dict[str, Any]]) -> str:
+    if _documented_game_codes(game_codes):
+        return "vendor_doc_game_code_table"
+    if FALLBACK_GAME_CODES.get(vendor):
+        return "fallback_pending_user_confirmation"
+    return "missing_pending_user_confirmation"
+
+
+def _documented_game_codes(game_codes: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(item.get("game_code", "")).strip()
+        for item in game_codes
+        if str(item.get("game_code", "")).strip()
+    ]
+
+
+def _extract_game_codes_from_raw(vendor_dir: Path) -> list[dict[str, str]]:
+    raw_path = vendor_dir / "raw_doc.json"
+    if not raw_path.exists():
+        return []
+    raw = _read_json(raw_path)
+    output = []
+    for table in raw.get("tables", []):
+        if not table:
+            continue
+        headers = [_normalize_header(cell) for cell in table[0]]
+        if "game code" not in headers:
+            continue
+        code_index = headers.index("game code")
+        type_index = headers.index("gametype") if "gametype" in headers else None
+        name_index = headers.index("game name") if "game name" in headers else None
+        for row in table[1:]:
+            if len(row) <= code_index:
+                continue
+            output.append(
+                {
+                    "game_type": row[type_index].strip()
+                    if type_index is not None and len(row) > type_index
+                    else "",
+                    "game_name": row[name_index].strip()
+                    if name_index is not None and len(row) > name_index
+                    else "",
+                    "game_code": row[code_index].strip(),
+                }
+            )
+    return output
+
+
+def _normalize_header(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
 
 
 def _read_json(path: Path) -> Any:

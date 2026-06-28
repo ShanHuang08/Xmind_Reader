@@ -1,4 +1,4 @@
-"""Unified CLI entry point for XMind, document, PDF, URL, and draft readers."""
+"""Unified CLI entry point for XMind, document, PDF, URL, and test case generation."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Build Codex-friendly knowledge files from XMind test maps, "
-            "Confluence-exported vendor documents, PDFs, or API doc URLs."
+            "Confluence-exported vendor documents, PDFs, API doc URLs, or generated XMind test cases."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -40,28 +40,28 @@ Examples:
 
   Parse a supplementary vendor API PDF:
     python main.py pdf --pdf EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
+    python main.py pdf --pdf /Users/shan/Documents/Vendor_API.pdf --vendor NewVendor
 
   Parse a supplementary vendor API URL:
     python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
 
-  Build a Codex-facing draft JSON scaffold for generation:
-    python main.py draft --vendor Esoterica
+  Generate draft JSON, structured test cases, and final XMind:
+    python main.py generate --vendor Esoterica
 
 Output folders:
   xmind reader -> xmind_detail/<Vendor>/
   doc reader   -> new_vendor_detail/<Vendor>/
   pdf reader   -> new_vendor_detail/<Vendor>/vendor_pdf/
   url reader   -> new_vendor_detail/<Vendor>/vendor_url/
-  draft builder -> output/<Vendor>/draft_test_cases.json
-  output/      -> reserved for future AI-generated XMind files
+  generate     -> output/<Vendor>/draft_test_cases.json and output/<Vendor>/<Vendor>_test_cases.xmind
 """,
     )
-    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,url,draft}")
+    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,url,generate}")
     _add_xmind_parser(subparsers)
     _add_doc_parser(subparsers)
     _add_pdf_parser(subparsers)
     _add_url_parser(subparsers)
-    _add_draft_parser(subparsers)
+    _add_generate_parser(subparsers)
     parsed = parser.parse_args(args)
 
     if parsed.reader is None:
@@ -93,9 +93,14 @@ Output folders:
             )
         )
 
-    from draft_main import main as draft_main
+    from generator_main import main as generator_main
 
-    return draft_main(_forward_args(parsed, names=("vendor", "vendor_detail", "output", "log_level")))
+    return generator_main(
+        _forward_args(
+            parsed,
+            names=("vendor", "vendor_detail", "output", "xmind_detail", "log_level"),
+        )
+    )
 
 
 def _add_xmind_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -107,8 +112,8 @@ def _add_xmind_parser(subparsers: argparse._SubParsersAction) -> None:
         epilog="""
 Examples:
   python main.py xmind
-  python main.py xmind --input EGTDigital_test_cases.xmind
-  python main.py xmind --input input_xmind/EGTDigital_test_cases.xmind --vendor EGTDigital
+  python main.py xmind --input VendorName_test_cases.xmind
+  python main.py xmind --input input_xmind/VendorName_test_cases.xmind --vendor VendorName
 """,
     )
     xmind.add_argument(
@@ -140,8 +145,8 @@ def _add_doc_parser(subparsers: argparse._SubParsersAction) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py doc --input Vendor_Esoterica.doc
-  python main.py doc --input new_vendor_source/Vendor_Esoterica.doc --vendor Esoterica
+  python main.py doc --input Vendor_VendorName.doc
+  python main.py doc --input new_vendor_source/Vendor_VendorName.doc --vendor VendorName
   python main.py doc --input new_vendor_source
 """,
     )
@@ -178,7 +183,8 @@ def _add_pdf_parser(subparsers: argparse._SubParsersAction) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py pdf --pdf EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
+  python main.py pdf --pdf VendorName_Integration_API_Spec_v1.28.pdf --vendor VendorName
+  python main.py pdf --pdf /Users/shan/Documents/Vendor_API.pdf --vendor NewVendor --output new_vendor_detail
   python main.py pdf --pdf C:\\Docs\\Vendor_API.pdf --vendor NewVendor --output new_vendor_detail
   python main.py pdf --pdf Vendor_API.pdf --vendor NewVendor --output new_vendor_detail/NewVendor/vendor_pdf
 """,
@@ -211,7 +217,7 @@ def _add_url_parser(subparsers: argparse._SubParsersAction) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
+  python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username account --password password
   python main.py url --url https://vendor.example.com/openapi.json --vendor NewVendor
   python main.py url --html exported_vendor_doc.html --url https://vendor.example.com/api-docs --vendor NewVendor
   python main.py url --url https://vendor.example.com/api-docs --vendor NewVendor --output new_vendor_detail
@@ -238,33 +244,34 @@ Examples:
     url.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
 
 
-def _add_draft_parser(subparsers: argparse._SubParsersAction) -> None:
-    draft = subparsers.add_parser(
-        "draft",
-        help="Build output/<Vendor>/draft_test_cases.json for Codex generation",
+def _add_generate_parser(subparsers: argparse._SubParsersAction) -> None:
+    generate = subparsers.add_parser(
+        "generate",
+        help="Generate output/<Vendor>/draft_test_cases.json and output/<Vendor>/<Vendor>_test_cases.xmind",
         description=(
-            "Build a Codex-facing draft JSON scaffold from new_vendor_detail/<Vendor>/ "
-            "without generating final test cases yet."
+            "Build a draft JSON scaffold from new_vendor_detail/<Vendor>/, generate structured "
+            "test cases, write the final XMind file, and validate it by reading it back."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py draft --vendor Esoterica
-  python main.py draft --vendor Esoterica --vendor-detail new_vendor_detail --output output
+  python main.py generate --vendor Esoterica
+  python main.py generate --vendor Esoterica --vendor-detail new_vendor_detail --output output
 """,
     )
-    draft.add_argument("--vendor", required=True, help="Vendor folder name under new_vendor_detail.")
-    draft.add_argument(
+    generate.add_argument("--vendor", required=True, help="Vendor folder name.")
+    generate.add_argument(
         "--vendor-detail",
         default="new_vendor_detail",
         help="Folder containing parsed vendor details. Default: new_vendor_detail",
     )
-    draft.add_argument(
-        "--output",
-        default="output",
-        help="Output folder for future generated test case artifacts. Default: output",
+    generate.add_argument("--output", default="output", help="Output root folder. Default: output")
+    generate.add_argument(
+        "--xmind-detail",
+        default="xmind_detail",
+        help="Reference XMind detail root. Default: xmind_detail",
     )
-    draft.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
+    generate.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
 
 
 def _forward_args(

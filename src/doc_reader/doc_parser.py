@@ -75,11 +75,36 @@ def _extract_html_text(raw_bytes: bytes) -> str:
             if content_type == "text/html":
                 payload = part.get_payload(decode=True) or b""
                 charset = part.get_content_charset() or "utf-8"
-                return payload.decode(charset, errors="replace")
+                return _decode_payload(payload, charset)
     text = raw_bytes.decode("utf-8", errors="ignore")
     if "<html" in text.lower() or "<body" in text.lower():
         return text
     return ""
+
+
+def _decode_payload(payload: bytes, charset: str) -> str:
+    normalized = _normalize_charset(charset)
+    candidates = [normalized, "utf-8", "utf-16", "cp950"]
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            return payload.decode(candidate, errors="replace")
+        except LookupError:
+            continue
+    return payload.decode("utf-8", errors="replace")
+
+
+def _normalize_charset(charset: str) -> str:
+    normalized = (charset or "utf-8").strip().strip('"').lower()
+    aliases = {
+        "unicode": "utf-16",
+        "utf8": "utf-8",
+        "utf16": "utf-16",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _parse_html_document(path: Path, html_text: str) -> dict[str, Any]:

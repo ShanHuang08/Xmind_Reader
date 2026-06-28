@@ -40,7 +40,10 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
     sections = _sections(parsed.get("paragraphs", []))
     endpoints = _extract_endpoints(parsed, sections)
     error_codes = _extract_error_codes(parsed, text)
+    for endpoint in endpoints:
+        _attach_endpoint_examples(endpoint, error_codes)
     checklist = _extract_vendor_master_checklist(parsed)
+    game_codes = _extract_game_codes(parsed)
     profile = _capability_profile(vendor_name, text, endpoints, checklist)
     return {
         "vendor": vendor_name,
@@ -51,6 +54,7 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
         "error_codes": error_codes,
         "capability_profile": profile,
         "vendor_master_checklist": checklist,
+        "game_codes": game_codes,
         "tables": parsed.get("tables", []),
         "tables_detailed": parsed.get("tables_detailed", []),
         "links": parsed.get("links", []),
@@ -170,6 +174,155 @@ def _parameter_rows(table: list[list[str]]) -> list[dict[str, str]]:
     return rows
 
 
+def _attach_endpoint_examples(endpoint: dict[str, Any], error_codes: list[dict[str, str]]) -> None:
+    request_parameters = endpoint.get("request_parameters", [])
+    response_parameters = endpoint.get("response_parameters", [])
+    if request_parameters:
+        endpoint["request_example"] = _example_object(request_parameters, include_optional=False)
+    if response_parameters:
+        endpoint["success_response_example"] = _example_object(
+            response_parameters,
+            include_optional=False,
+            response_mode=True,
+        )
+        endpoint["error_response_example"] = _error_response_example(error_codes)
+
+
+def _example_object(
+    parameters: list[dict[str, str]],
+    include_optional: bool = False,
+    response_mode: bool = False,
+) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for parameter in parameters:
+        if not _include_example_parameter(parameter, include_optional=include_optional):
+            continue
+        name = str(parameter.get("name", "")).strip()
+        if not name:
+            continue
+        value = _example_value(parameter, response_mode=response_mode)
+        _set_nested_value(output, name, value)
+    return output
+
+
+def _include_example_parameter(parameter: dict[str, str], include_optional: bool = False) -> bool:
+    name = str(parameter.get("name", "")).strip().lower()
+    description = str(parameter.get("description", "")).strip().lower()
+    required = str(parameter.get("required", "")).strip().upper()
+
+    if name in {"token", "data/token"}:
+        return True
+    if name == "type" and "only in credit" in description:
+        return False
+    if not include_optional and required in {"N", "NO", "FALSE", "0"}:
+        return False
+    return True
+
+
+def _set_nested_value(output: dict[str, Any], name: str, value: Any) -> None:
+    parts = [part for part in name.split("/") if part]
+    if not parts:
+        return
+    current = output
+    for part in parts[:-1]:
+        if not isinstance(current.get(part), dict):
+            current[part] = {}
+        current = current[part]
+    current[parts[-1]] = value
+
+
+def _example_value(parameter: dict[str, str], response_mode: bool = False) -> Any:
+    name = str(parameter.get("name", "")).lower()
+    param_type = str(parameter.get("type", "")).lower()
+    description = str(parameter.get("description", "")).lower()
+    text = " ".join([name, param_type, description])
+
+    if response_mode:
+        if name == "result":
+            return "OK"
+        if name == "timestamp":
+            return "20250825T163933Z"
+        if name.endswith("accountbalance") or name.endswith("accountfreebalance"):
+            return 999999
+        if name.endswith("accountcurrency"):
+            return "USD"
+        if name.endswith("transactionid"):
+            return "78ba204111ce"
+        if name.endswith("token"):
+            return "99aa356-2x99"
+        if param_type == "json":
+            return {}
+
+    if name == "sessionid":
+        return "7481b6cb-6aa3-46dc-a131-aea2d2a4797c"
+    if name == "hash":
+        return "validhashvalue"
+    if name == "amount":
+        return 10
+    if name == "gamename":
+        return "Burning Slot 40"
+    if name == "gameid":
+        return "LUCKYFRUITZ"
+    if name == "transactionid":
+        return "D4330252729-4459762329"
+    if name == "playid":
+        return "4330252729"
+    if name == "operation":
+        return "DEBIT"
+    if name == "gamemode":
+        return "REAL"
+    if name == "userid":
+        return "sampleUser78"
+    if name == "amountcurrency" or "currency" in text:
+        return "USD"
+    if name == "token":
+        return "r9CfvbG7B5NylcuDZb24"
+    if name == "playstatus":
+        return "1"
+    if name == "rounddetails":
+        return "Spin"
+    if name == "description":
+        return "OK"
+    if "url" in name or "url" in description:
+        return "https://example.com/replay/4330252729"
+    if "numeric string" in param_type:
+        return "10"
+    if name.endswith("id") or " identifier" in description or " id" in description:
+        return f"{parameter.get('name', 'id')}_001"
+    if "amount" in text:
+        return 10
+    if "timestamp" in text or "time" in text:
+        return "20250825T163933Z"
+    if "int" in param_type or "long" in param_type:
+        return 1
+    return f"sample_{parameter.get('name', 'value')}"
+
+
+def _error_response_example(error_codes: list[dict[str, str]]) -> dict[str, Any]:
+    selected = _select_error_code(error_codes)
+    return {
+        "result": "ERROR",
+        "timestamp": "20110322T152403Z",
+        "error": {
+            "code": selected.get("code", "ERROR"),
+            "message": selected.get("context", "Error"),
+        },
+    }
+
+
+def _select_error_code(error_codes: list[dict[str, str]]) -> dict[str, str]:
+    for item in error_codes:
+        context = str(item.get("context", "")).lower()
+        if "insufficient funds" in context:
+            return item
+    for item in error_codes:
+        code = str(item.get("code", "")).strip()
+        context = str(item.get("context", "")).lower()
+        if code and code != "0" and "success" not in context:
+            return item
+    return {"code": "ERROR", "context": "Error"}
+
+
 def _extract_error_codes(parsed: dict[str, Any], text: str) -> list[dict[str, str]]:
     found: dict[str, str] = {}
     for table in parsed.get("tables", []):
@@ -275,6 +428,34 @@ def _extract_vendor_master_checklist(parsed: dict[str, Any]) -> list[dict[str, A
                     "capability_key": CHECKLIST_CAPABILITY_MAP.get(name, ""),
                 }
             )
+    return output
+
+
+def _extract_game_codes(parsed: dict[str, Any]) -> list[dict[str, str]]:
+    output = []
+    for table in parsed.get("tables", []):
+        if not table:
+            continue
+        headers = [_normalize_header(cell) for cell in table[0]]
+        if "game code" not in headers:
+            continue
+        code_index = headers.index("game code")
+        type_index = headers.index("gametype") if "gametype" in headers else None
+        name_index = headers.index("game name") if "game name" in headers else None
+        for row in table[1:]:
+            if len(row) <= code_index:
+                continue
+            item = {
+                "game_type": row[type_index].strip()
+                if type_index is not None and len(row) > type_index
+                else "",
+                "game_name": row[name_index].strip()
+                if name_index is not None and len(row) > name_index
+                else "",
+                "game_code": row[code_index].strip(),
+            }
+            if item["game_name"] or item["game_code"]:
+                output.append(item)
     return output
 
 

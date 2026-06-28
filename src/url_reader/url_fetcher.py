@@ -34,9 +34,47 @@ class UrlFetchResult:
 
 
 def fetch_url(url: str, username: str = "", password: str = "", timeout: int = 30) -> UrlFetchResult:
-    if platform.system().lower() == "windows":
-        return _fetch_url_with_powershell(url, username, password, timeout)
+    errors: list[str] = []
+    for candidate_url in _candidate_urls(url):
+        try:
+            return _fetch_url_with_urllib(candidate_url, username, password, timeout)
+        except UrlReadError as exc:
+            errors.append(str(exc))
+            if _should_try_next_url(exc):
+                continue
+            break
 
+    if platform.system().lower() == "windows" and shutil.which("powershell"):
+        try:
+            return _fetch_url_with_powershell(url, username, password, timeout)
+        except UrlReadError as exc:
+            errors.append(str(exc))
+
+    for candidate_url in _candidate_urls(url):
+        try:
+            return _fetch_url_with_playwright(candidate_url, timeout)
+        except UrlReadError as exc:
+            errors.append(f"browser fallback failed for {candidate_url}: {exc}")
+            if _should_try_next_url(exc):
+                continue
+            break
+
+    raise UrlReadError("; ".join(error for error in errors if error) or f"Failed to read {url}")
+
+
+def _candidate_urls(url: str) -> list[str]:
+    urls = [url]
+    if not url.endswith("/"):
+        urls.append(f"{url}/")
+    return urls
+
+
+def _should_try_next_url(error: Exception) -> bool:
+    message = str(error)
+    return "401" in message or "404" in message or "403" in message
+
+
+def _fetch_url_with_urllib(url: str, username: str, password: str, timeout: int) -> UrlFetchResult:
     headers = {
         "User-Agent": "XMind-Reader-URL-Reader/1.0",
         "Accept": "text/html,application/json,application/yaml,text/yaml,text/plain,*/*",
@@ -158,9 +196,8 @@ def _fetch_url_with_playwright(url: str, timeout: int) -> UrlFetchResult:
     node_modules = _bundled_node_modules()
     if not node_path or not node_modules:
         raise UrlReadError("Bundled Node.js or node_modules not found for browser fallback.")
-    playwright_core = node_modules / ".pnpm" / "playwright-core@1.60.0" / "node_modules"
-    playwright_pkg = node_modules / ".pnpm" / "playwright@1.60.0" / "node_modules"
-    if not (node_modules / "playwright").exists():
+    playwright_paths = _playwright_node_paths(node_modules)
+    if not playwright_paths:
         raise UrlReadError("Playwright package is not available for browser fallback.")
 
     with tempfile.TemporaryDirectory(prefix="url_reader_browser_") as tmp:
@@ -201,7 +238,7 @@ const fs = require("fs");
         env.update(
             {
                 "NODE_OPTIONS": "--use-system-ca",
-                "NODE_PATH": os.pathsep.join(str(path) for path in (node_modules, playwright_core, playwright_pkg)),
+                "NODE_PATH": os.pathsep.join(str(path) for path in playwright_paths),
                 "URL_READER_URL": url,
                 "URL_READER_TIMEOUT": str(timeout),
                 "URL_READER_BODY": body_path,
@@ -233,19 +270,45 @@ const fs = require("fs");
         )
 
 
+def _playwright_node_paths(node_modules: Path) -> list[Path]:
+    paths = [node_modules]
+    if (node_modules / "playwright").exists():
+        return paths
+    pnpm_dir = node_modules / ".pnpm"
+    if pnpm_dir.exists():
+        for package_dir in pnpm_dir.glob("playwright*@*/node_modules"):
+            if (package_dir / "playwright").exists() or (package_dir / "playwright-core").exists():
+                paths.append(package_dir)
+        if len(paths) > 1:
+            return paths
+    return []
+
+
 def _bundled_node() -> Path | None:
     home = Path.home()
-    candidate = home / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "bin" / "node.exe"
-    if candidate.exists():
-        return candidate
+    node_bin = home / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "bin"
+    for executable in ("node.exe", "node"):
+        candidate = node_bin / executable
+        if candidate.exists():
+            return candidate
     resolved = shutil.which("node")
     return Path(resolved) if resolved else None
 
 
 def _bundled_node_modules() -> Path | None:
     home = Path.home()
-    candidate = home / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "node_modules"
-    return candidate if candidate.exists() else None
+    candidates = [
+        home / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "node_modules",
+        Path.cwd() / "node_modules",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    resolved_node = shutil.which("node")
+    if not resolved_node:
+        return None
+    node_modules = Path(resolved_node).resolve().parents[1] / "lib" / "node_modules"
+    return node_modules if node_modules.exists() else None
 
 
 def is_openapi_like(fetch_result: UrlFetchResult) -> bool:

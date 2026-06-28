@@ -17,6 +17,7 @@ def export_vendor_detail(detail: dict[str, Any], output_root: Path) -> dict[str,
         "error_codes": vendor_dir / "error_codes.json",
         "capability_profile": vendor_dir / "capability_profile.json",
         "vendor_master_checklist": vendor_dir / "vendor_master_checklist.json",
+        "game_codes": vendor_dir / "game_codes.json",
         "source_meta": vendor_dir / "source_meta.json",
         "raw_doc": vendor_dir / "raw_doc.json",
     }
@@ -25,6 +26,7 @@ def export_vendor_detail(detail: dict[str, Any], output_root: Path) -> dict[str,
     _write_json(detail.get("error_codes", []), paths["error_codes"])
     _write_json(detail.get("capability_profile", {}), paths["capability_profile"])
     _write_json(detail.get("vendor_master_checklist", []), paths["vendor_master_checklist"])
+    _write_json(detail.get("game_codes", []), paths["game_codes"])
     _write_json(detail.get("source_meta", {}), paths["source_meta"])
     _write_json(_raw_payload(detail), paths["raw_doc"])
     return paths
@@ -92,6 +94,7 @@ def _raw_payload(detail: dict[str, Any]) -> dict[str, Any]:
         "title": detail.get("title"),
         "sections": detail.get("sections", []),
         "tables": detail.get("tables", []),
+        "game_codes": detail.get("game_codes", []),
         "tables_detailed": detail.get("tables_detailed", []),
         "links": detail.get("links", []),
     }
