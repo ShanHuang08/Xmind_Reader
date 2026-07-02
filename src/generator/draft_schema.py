@@ -58,10 +58,11 @@ ALLOWED_OUTPUT_SECTIONS = {
     "User Behavior > Get Player balance",
     "User Behavior > Bet and Settle",
     "User Behavior > Cancel Bet",
-    "User Behavior > Game type > Slots",
-    "User Behavior > Game type > Arcade game",
+    "User Behavior > Game type > Slot game",
+    "User Behavior > Game type > Arcade",
     "User Behavior > Game type > Mini game",
-    "User Behavior > Game type > Crash game",
+    "User Behavior > Game type > Live game",
+    "User Behavior > Game type > Video Bingo",
 }
 
 KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
@@ -73,10 +74,16 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "settlement": "User Behavior > Bet and Settle",
     "amount_precision": "User Behavior > Bet and Settle",
     "multiple_bets": "User Behavior > Bet and Settle",
+    "multiple_bets_one_bet_endpoint": "User Behavior > Bet and Settle",
+    "multiple_bets_two_bet_endpoint": "User Behavior > Bet and Settle",
     "multiple_settlements": "User Behavior > Bet and Settle",
+    "multiple_settlements_has_round_end_control_parameter": "User Behavior > Bet and Settle",
+    "multiple_settlements_no_round_end_control_parameter": "User Behavior > Bet and Settle",
     "modify_settlement_adjustment": "User Behavior > Bet and Settle",
     "settle_by_round_or_settle_by_bet": "User Behavior > Bet and Settle",
     "bet_and_settle": "User Behavior > Bet and Settle",
+    "bet_and_settle_has_round_end_control_parameter": "User Behavior > Bet and Settle",
+    "bet_and_settle_no_round_end_control_parameter": "User Behavior > Bet and Settle",
     "betandsettle": "User Behavior > Bet and Settle",
     "idempotency": "User Behavior > Bet and Settle",
     "rollback": "User Behavior > Cancel Bet",
@@ -91,6 +98,123 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "arcade_game": "User Behavior > Game type > Arcade game",
     "mini_game": "User Behavior > Game type > Mini game",
     "crash_game": "User Behavior > Game type > Crash game",
+}
+
+CAPABILITY_CATEGORY_VARIANTS = {
+    "multiple_bets": [
+        {
+            "category": "multiple_bets_one_bet_endpoint",
+            "template_variant": "one_bet_endpoint",
+            "description": (
+                "Use when the vendor performs multiple bets through the same bet endpoint. "
+                "The endpoint may use an action/method parameter or repeated requests with the same round context."
+            ),
+            "applicability": {
+                "required_capabilities": ["multiple_bets"],
+                "endpoint_topology": "one_bet_endpoint",
+            },
+        },
+        {
+            "category": "multiple_bets_two_bet_endpoint",
+            "template_variant": "two_bet_endpoint",
+            "description": (
+                "Use when the vendor performs multiple bets through two separated bet-like endpoints, "
+                "such as Bet and Rebet."
+            ),
+            "applicability": {
+                "required_capabilities": ["multiple_bets"],
+                "endpoint_topology": "two_bet_endpoint",
+            },
+        },
+    ],
+    "bet_and_settle": [
+        {
+            "category": "bet_and_settle_has_round_end_control_parameter",
+            "template_variant": "has_round_end_control_parameter",
+            "description": (
+                "Use when a combined bet-and-settlement endpoint exists and has a parameter that controls round completion."
+            ),
+            "applicability": {
+                "required_endpoint_roles": ["combined_bet_settlement"],
+                "required_parameter_semantics": ["combined_bet_settlement", "round_end_control"],
+                "parameter_semantics": {
+                    "combined_bet_settlement": True,
+                    "round_end_control": True,
+                },
+            },
+        },
+        {
+            "category": "bet_and_settle_no_round_end_control_parameter",
+            "template_variant": "no_round_end_control_parameter",
+            "description": (
+                "Use when a combined bet-and-settlement endpoint exists but has no explicit round-end control parameter."
+            ),
+            "applicability": {
+                "required_endpoint_roles": ["combined_bet_settlement"],
+                "required_parameter_semantics": ["combined_bet_settlement"],
+                "parameter_semantics": {
+                    "combined_bet_settlement": True,
+                    "round_end_control": False,
+                },
+            },
+        },
+    ],
+    "multiple_settlements": [
+        {
+            "category": "multiple_settlements_has_round_end_control_parameter",
+            "template_variant": "has_round_end_control_parameter",
+            "description": (
+                "Use when the settlement/result endpoint has a parameter that controls whether the round is complete."
+            ),
+            "applicability": {
+                "required_capabilities": ["multiple_settlements"],
+                "required_endpoint_roles": ["settlement"],
+                "required_parameter_semantics": ["round_end_control"],
+                "parameter_semantics": {"round_end_control": True},
+            },
+        },
+        {
+            "category": "multiple_settlements_no_round_end_control_parameter",
+            "template_variant": "no_round_end_control_parameter",
+            "description": (
+                "Use when multiple settlements are supported but the settlement/result endpoint has no round-end control parameter."
+            ),
+            "applicability": {
+                "required_capabilities": ["multiple_settlements"],
+                "required_endpoint_roles": ["settlement"],
+                "parameter_semantics": {"round_end_control": False},
+            },
+        },
+    ],
+}
+
+CONDITIONAL_MANDATORY_CATEGORIES = {
+    "authenticate": {
+        "category": "authenticate",
+        "output_section": "User Behavior > Launch Game",
+        "condition": "endpoint_analysis.endpoint_topology.authenticate.mode == endpoint_present",
+    },
+    "bet_and_settle": {
+        "category": "bet_and_settle",
+        "output_section": "User Behavior > Bet and Settle",
+        "condition": "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint",
+    },
+    "bet_and_settle_has_round_end_control_parameter": {
+        "category": "bet_and_settle_has_round_end_control_parameter",
+        "output_section": "User Behavior > Bet and Settle",
+        "condition": (
+            "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint "
+            "and endpoint_analysis.parameter_semantics.round_end_control == true"
+        ),
+    },
+    "bet_and_settle_no_round_end_control_parameter": {
+        "category": "bet_and_settle_no_round_end_control_parameter",
+        "output_section": "User Behavior > Bet and Settle",
+        "condition": (
+            "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint "
+            "and endpoint_analysis.parameter_semantics.round_end_control == false"
+        ),
+    },
 }
 
 REQUIRED_DRAFT_FIELDS = (
@@ -119,6 +243,12 @@ OPTIONAL_TEST_CASE_FIELDS = (
     "endpoint",
     "endpoint_name",
     "endpoint_group",
+    "template_variant",
+    "applicability",
+    "behavior_flow",
+    "required_endpoint_roles",
+    "required_parameter_semantics",
+    "endpoint_analysis",
     "endpoints",
     "parameter",
     "tags",
@@ -182,6 +312,8 @@ def schema_summary() -> dict[str, Any]:
         "api_parameter_test_contract": API_PARAMETER_TEST_CONTRACT,
         "allowed_output_sections": sorted(ALLOWED_OUTPUT_SECTIONS),
         "knowledge_category_to_xmind_section": KNOWLEDGE_CATEGORY_TO_XMIND_SECTION,
+        "capability_category_variants": CAPABILITY_CATEGORY_VARIANTS,
+        "conditional_mandatory_categories": CONDITIONAL_MANDATORY_CATEGORIES,
         "expected_error_required_fields": list(EXPECTED_ERROR_REQUIRED_FIELDS),
         "inferred_error_sources": sorted(INFERRED_ERROR_SOURCES),
     }

@@ -223,8 +223,9 @@ src/
 | `generator/draft_builder.py` | Draft JSON 鷹架。讀取 capability_profile / endpoints / error_codes / checklist，組合 draft 檔。包含 endpoint 角色推斷、前置條件模板、generation_mapping（category → XMind section 對應表）。 |
 | `generator/draft_schema.py` | Draft schema 常數。定義 `SCHEMA_VERSION`、XMind 欄位標籤、API parameter test 合約、allowed output sections、category → section mapping、required/optional 欄位、negative keywords。 |
 | `generator/draft_validator.py` | Draft JSON 驗證器。檢查 required fields、output_section 合法性、category → section routing、scenario 格式、preconditions/remarks 標籤、steps 完整性、expected_error、id 唯一性。 |
-| `generator/case_generation_context.py` | 生成上下文。從 draft 取出 generation context（capability_profile、endpoint_roles、error_codes），選擇 parameter error code，產生預設測試帳號。 |
-| `generator/reference_selector.py` | 參考知識選擇。依 capability_profile 選擇 mandatory + capability-specific categories，找出對應的 xmind_detail chunk 檔案作為參考。 |
+| `generator/case_generation_context.py` | 生成上下文。從 draft 取出 generation context（capability_profile、endpoint_roles、endpoint_analysis、error_codes），選擇 parameter error code，產生預設測試帳號。 |
+| `generator/endpoint_analyzer.py` | Endpoint topology / parameter semantics 分析器。從 endpoint role 和 request parameters 判斷 betAndSettle combined endpoint、multiple bets endpoint 形態、settlement 是否有 round-end control parameter / jackpot control parameter。 |
+| `generator/reference_selector.py` | 參考知識選擇。依 capability_profile + endpoint_analysis 選擇 mandatory、conditional mandatory、capability-specific categories，並找出對應的 xmind_detail chunk 檔案作為參考。 |
 | `generator/test_case_generator.py` | 測試案例生成器（第一版：parameter validation）。遍歷每個 endpoint 的 request parameters，自動產生「缺失 / 空值 / 錯誤值」等 negative case，含 request payload 和 expected error response。 |
 | `xmind_writer/metersphere_profile_extractor.py` | MeterSphere profile 提取。從 golden XMind 參考檔抽出 case 欄位風格、topic 深度、writer guidance，供 writer 遵循。 |
 | `xmind_writer/metersphere_xmind_writer.py` | XMind 寫入器。將驗證過的 draft 寫為 XMind ZIP（content.json + metadata.json + manifest.json），依 output_section 建立層級結構。 |
@@ -342,12 +343,34 @@ xmind_detail/scenario_templates/   ← 資料夾已建立，等待 XMind 完成
 XMind 結構分為兩層：
 
 - **Mandatory**：不管 vendor capability 為何都要產生的必要測項（launch game、balance、bet、settlement、rollback、amount precision）
-- **Capability: xxx**：依 `capability_profile.supports[xxx]` 決定是否選入（multiple_bets、rollback_settlements、cancel_bet、free_spin、jackpot、idempotency 等）
+- **Conditional Mandatory**：屬於必要測項，但必須先由 API doc 形態判斷是否可套用。例如 `BetAndSettle` 只有在偵測到 combined bet-and-settlement endpoint 時才選入，最後仍放在 `User Behavior > Bet and Settle`。
+- **Capability: xxx**：先依 `capability_profile.supports[xxx]` 決定是否選入，再依 `endpoint_analysis` 選擇正確分支（multiple_bets、multiple_settlements、rollback_settlements、cancel_bet、free_spin、jackpot、idempotency 等）。`jackpot` 只有在 settlement/result endpoint 真的有 jackpot 相關 request parameters 時才抽。
+
+`endpoint_analyzer.py` 會把完整 endpoint / parameter table 壓縮成小型摘要，讓後續 generator 不必反覆讀完整 vendor doc，也避免抽錯 User Behavior template：
+
+```text
+endpoint_roles + request_parameters
+  -> endpoint_analysis.endpoint_topology
+  -> endpoint_analysis.parameter_semantics
+  -> selected User_Behavior_map branch
+```
+
+目前已定義的分支：
+
+- `BetAndSettle`：conditional mandatory。只有 `endpoint_analysis.endpoint_topology.bet_and_settle.mode = combined_endpoint` 時才抽。
+  - `has_round_end_control_parameter`：combined endpoint 有 round-end control parameter。
+  - `no_round_end_control_parameter`：combined endpoint 沒有 explicit round-end control parameter。
+- `multiple_bets`
+  - `one_bet_endpoint`：同一個 bet endpoint，可能靠 action/method parameter 控制；User_Behavior_map 結構為 `Multiple Bets > one_bet_endpoint > test cases`。
+  - `two_bet_endpoint`：兩個分開的 bet-like endpoints，例如 Bet / Rebet；User_Behavior_map 結構為 `Multiple Bets > two_bet_endpoint > test cases`。
+- `multiple_settlements`
+  - `has_round_end_control_parameter`：settlement/result endpoint 有 round-end control parameter。
+  - `no_round_end_control_parameter`：沒有 round-end control parameter，測項重點改看 transfer posting、balance change、idempotency / duplicate behavior。
 
 **實現路徑：**
 
 1. 完成 Scenario Templates XMind 並用 xmind_reader 分解到 `xmind_detail/scenario_templates/`
-2. Category → Endpoint 反向映射（從 endpoint role 找到對應的 endpoint）
+2. Endpoint Analyzer + Category → Endpoint 反向映射（先判斷 topology / parameter semantics，再找對應 endpoint）
 3. Capability-Driven Error Code Selection（依能力決定成功/失敗 + 選擇對應的錯誤碼）
 4. Multi-Step Flow Builder（組合多 endpoint payload 成多步驟流程）
 5. Draft Validator 擴展（加入 User Behavior scenario 格式驗證規則）

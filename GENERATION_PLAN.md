@@ -142,16 +142,33 @@ Mandatory test cases:
 - `rollback`
 - `amount_precision`
 
+Conditional mandatory test cases:
+
+- `authenticate`
+  - Select only when the API doc contains an authenticate/authentication endpoint.
+  - Route to `User Behavior > Launch Game`.
+  - In `User_Behavior_map.xmind`, use `Authenticate > test cases`.
+- `bet_and_settle`
+  - Select only when the API doc contains a combined bet-and-settlement endpoint.
+  - Route to `User Behavior > Bet and Settle`.
+  - In `User_Behavior_map.xmind`, keep this separate from normal `bet` and `settlement` templates because not every vendor supports a combined endpoint.
+  - Because BetAndSettle includes settlement behavior, split it by settlement parameter semantics:
+    - `bet_and_settle_has_round_end_control_parameter`
+    - `bet_and_settle_no_round_end_control_parameter`
+
 Capability-specific categories:
 
 - `multiple_bets`
+  - `multiple_bets_one_bet_endpoint`
+  - `multiple_bets_two_bet_endpoint`
 - `multiple_settlements`
+  - `multiple_settlements_has_round_end_control_parameter`
+  - `multiple_settlements_no_round_end_control_parameter`
 - `modify_settlement_adjustment`
 - `settle_by_round_or_settle_by_bet`
 - `rollback_bet`
 - `rollback_settled_bet`
 - `rollback_by_round_or_rollback_by_bet`
-- `bet_and_settle`
 - `rollback_bet_and_settle`
 - `idempotency`
 - `freespin`
@@ -161,13 +178,82 @@ Codex should select category chunks based on `capability_profile.json` and `draf
 
 Examples:
 
-- If `multiple_bets=true`, load `user_behavior/multiple_bets` reference cases.
-- If `multiple_settlements=true`, load `user_behavior/multiple_settlements` reference cases.
+- If `multiple_bets=true`, load `user_behavior/multiple_bets` reference cases, then choose a child variant by endpoint topology.
+- Multiple Bets currently uses `user_behavior/multiple_bets/one_bet_endpoint/test cases` or `user_behavior/multiple_bets/two_bet_endpoint/test cases`, depending on endpoint topology.
+- If `multiple_settlements=true`, load `user_behavior/multiple_settlements` reference cases, then choose a child variant by settlement parameter semantics.
+- If the settlement/result endpoint has a round-end control parameter, prefer `user_behavior/multiple_settlements/has_round_end_control_parameter`.
+- If the settlement/result endpoint has no round-end control parameter, prefer `user_behavior/multiple_settlements/no_round_end_control_parameter`.
 - If `rollback_settlements=true`, load `user_behavior/rollback_settled_bet` reference cases.
 - If adjustment is supported, load `user_behavior/modify_settlement_adjustment` reference cases.
 - For all vendors, always load mandatory cases: launch game, balance, bet, settlement, rollback, and amount precision.
+- If `jackpot=true` and the settlement/result endpoint has jackpot-related request parameters, load `user_behavior/jackpot` reference cases.
+- If `endpoint_analysis.endpoint_topology.authenticate.mode=endpoint_present`, load conditional mandatory `user_behavior/authenticate` reference cases.
+- If `endpoint_analysis.endpoint_topology.bet_and_settle.mode=combined_endpoint`, load conditional mandatory `user_behavior/bet_and_settle` reference cases.
+- If BetAndSettle has a round-end control parameter, prefer `user_behavior/bet_and_settle/has_round_end_control_parameter`.
+- If BetAndSettle has no round-end control parameter, prefer `user_behavior/bet_and_settle/no_round_end_control_parameter`.
 
 The generator should not decide reference cases by endpoint name alone. Endpoint names vary by vendor, while categories describe reusable test intent.
+
+For capability-specific categories, `capability_profile.supports` is only the first filter. Some categories also require endpoint topology and parameter semantics checks.
+
+- `one_bet_endpoint`: one bet endpoint handles repeated/multiple bets. It may use an action/method parameter or repeated calls with the same round context.
+- `two_bet_endpoint`: multiple-bet behavior is split across two bet-like endpoints, such as `Bet` and `Rebet`.
+- `has_round_end_control_parameter`: multiple settlement flow has a settlement/result parameter that controls whether the round is complete, such as `roundCompleted`, `isEndRound`, `roundEnd`, or `endRound`.
+- `no_round_end_control_parameter`: multiple settlement flow has no explicit round-end control parameter. Expected results should focus on transfer posting, balance change, idempotency key, and duplicate credit behavior instead of round closure.
+- If the topology is unclear, the generator should not force a template. It should skip the variant or add an unresolved question for user/vendor confirmation.
+
+Settlement template selection uses a target-first order:
+
+```text
+1. Settlement Target
+   - settle_by_bet
+   - settle_by_round
+
+2. Settlement Behavior
+   - jackpot
+   - multiple_settlements
+
+3. Parameter Semantics
+   - has_round_end_control_parameter
+   - no_round_end_control_parameter
+```
+
+This means `settle_by_round`, `jackpot`, and `multiple_settlements` are different axes. The generator should first decide what the settlement targets, then decide whether jackpot is applicable from settlement parameters, and only then choose the multiple-settlement round-end-control branch.
+
+Recommended `User_Behavior_map.xmind` structure:
+
+```text
+Settlement
+  settle_by_bet
+    jackpot
+      test cases
+    multiple_settlements
+      has_round_end_control_parameter
+        test cases
+      no_round_end_control_parameter
+        test cases
+
+  settle_by_round
+    jackpot
+      test cases
+    multiple_settlements
+      has_round_end_control_parameter
+        test cases
+      no_round_end_control_parameter
+        test cases
+```
+
+Generated case metadata should preserve these dimensions separately:
+
+```json
+{
+  "category": "multiple_settlements",
+  "settlement_target": "settle_by_round",
+  "behavior_flow": "multiple_settlements",
+  "template_variant": "has_round_end_control_parameter",
+  "output_section": "User Behavior > Bet and Settle"
+}
+```
 
 ## Generated XMind Output Structure
 
@@ -246,10 +332,16 @@ Category to generated XMind section mapping:
 | `settlement` | `User Behavior > Bet and Settle` |
 | `amount_precision` | `User Behavior > Bet and Settle` |
 | `multiple_bets` | `User Behavior > Bet and Settle` |
+| `multiple_bets_one_bet_endpoint` | `User Behavior > Bet and Settle` |
+| `multiple_bets_two_bet_endpoint` | `User Behavior > Bet and Settle` |
 | `multiple_settlements` | `User Behavior > Bet and Settle` |
+| `multiple_settlements_has_round_end_control_parameter` | `User Behavior > Bet and Settle` |
+| `multiple_settlements_no_round_end_control_parameter` | `User Behavior > Bet and Settle` |
 | `modify_settlement_adjustment` | `User Behavior > Bet and Settle` |
 | `settle_by_round_or_settle_by_bet` | `User Behavior > Bet and Settle` |
 | `bet_and_settle` / `betandsettle` | `User Behavior > Bet and Settle` |
+| `bet_and_settle_has_round_end_control_parameter` | `User Behavior > Bet and Settle` |
+| `bet_and_settle_no_round_end_control_parameter` | `User Behavior > Bet and Settle` |
 | `idempotency` | `User Behavior > Bet and Settle` |
 | `rollback` | `User Behavior > Cancel Bet` |
 | `rollback_bet` | `User Behavior > Cancel Bet` |
@@ -278,6 +370,7 @@ Current implemented scope:
 - Preconditions prefer `endpoint.request_example`; otherwise the generator derives normal values from parameter name, type, and description.
 - Remarks prefer `endpoint.success_response_example` and `endpoint.error_response_example`.
 - Step expected results include a parameter validation error message and an error response JSON block.
+- Special API parameter scopes include amount precision/value cases, timestamp shorter value, string space for `userId`/`roundId`, integer value for `roundDetails`, and uppercase input for player-name-related parameters such as `userId`, `username`, `playerId`, `playerName`, `memberId`, and `accountId`.
 - User Behavior generation is still pending and should be driven by scenario templates/reference cases.
 
 The generator should let Codex read:
@@ -364,27 +457,51 @@ Scenario Templates
 │   │   ├── case：normal bet (lose)
 │   │   └── case：insufficient balance
 │   ├── Settlement
-│   │   └── ...
+│   │   ├── settle_by_bet
+│   │   │   ├── jackpot
+│   │   │   │   └── test cases
+│   │   │   └── multiple_settlements
+│   │   │       ├── has_round_end_control_parameter
+│   │   │       │   └── test cases
+│   │   │       └── no_round_end_control_parameter
+│   │   │           └── test cases
+│   │   └── settle_by_round
+│   │       ├── jackpot
+│   │       │   └── test cases
+│   │       └── multiple_settlements
+│   │           ├── has_round_end_control_parameter
+│   │           │   └── test cases
+│   │           └── no_round_end_control_parameter
+│   │               └── test cases
 │   ├── Rollback
 │   │   └── ...
 │   └── Amount Precision
 │       └── ...
+├── Conditional Mandatory: bet_and_settle  ← only selected when a combined bet-and-settlement endpoint exists
+│   ├── has_round_end_control_parameter
+│   │   └── case：full bet+settle flow with round-end control
+│   └── no_round_end_control_parameter
+│       └── case：full bet+settle flow without explicit round closure
+├── Conditional Mandatory: Authenticate    ← only selected when an authenticate endpoint exists
+│   └── test cases
+│       └── case：authenticate player successfully
 ├── Capability: multiple_bets              ← only selected when supports.multiple_bets=true
-│   ├── case：two bets same round both succeed
-│   └── case：two bets same round second rejected
-├── Capability: multiple_settlements
-│   └── ...
+│   ├── one_bet_endpoint                   ← same bet endpoint; may use action/method parameter
+│   │   └── test cases
+│   │       ├── case：two bets same round both succeed
+│   │       └── case：two bets same round second rejected
+│   └── two_bet_endpoint                   ← separated bet-like endpoints, such as Bet and Rebet
+│       └── test cases
+│           ├── case：bet then rebet both succeed
+│           └── case：rebet without original bet rejected
+├── Capability: multiple_settlements        ← selected through Settlement/<target>/multiple_settlements/<semantics>
 ├── Capability: rollback_settlements
 │   └── case：rollback settled bet
 ├── Capability: cancel_bet
 │   └── case：cancel unsettled bet
-├── Capability: bet_and_settle
-│   └── case：full bet+settle flow
 ├── Capability: modify_settlements_adjustment
 │   └── ...
 ├── Capability: free_spin
-│   └── ...
-├── Capability: jackpot
 │   └── ...
 ```
 
@@ -404,8 +521,9 @@ xmind_detail/scenario_templates/
 
 1. Read `xmind_detail/scenario_templates/modules/*.json`
 2. Filter: all cases under `Mandatory` are always selected; cases under `Capability: xxx` are selected only when `capability_profile.supports[xxx] == true`
-3. For each selected case, substitute placeholders with the new vendor's `endpoint_roles`, `game_codes`, `error_codes` values
-4. Expected results are derived by logical inference from capability profile + error code mapping
+3. For categories with variants, apply an additional topology or parameter-semantics filter. For example, `multiple_bets/one_bet_endpoint` requires one reusable bet endpoint and `multiple_bets/two_bet_endpoint` requires two separated bet-like endpoints. `bet_and_settle/has_round_end_control_parameter` and `multiple_settlements/has_round_end_control_parameter` require a settlement/result request parameter that controls round closure.
+4. For each selected case, substitute placeholders with the new vendor's `endpoint_roles`, `game_codes`, `error_codes` values
+5. Expected results are derived by logical inference from capability profile + error code mapping
 
 **Benefits over hardcoding:**
 
@@ -471,7 +589,79 @@ This requires knowing:
 - How to compose request payloads for each endpoint
 - Data flow between steps (bet `transactionId` → settlement `transactionId`)
 
-#### Requirement 5: Category → Endpoint Reverse Mapping
+#### Requirement 5: Endpoint Analyzer And Category → Endpoint Reverse Mapping
+
+Current implemented foundation:
+
+- `src/generator/endpoint_analyzer.py` reads `endpoint_roles[].request_parameters`.
+- `draft_builder.py` writes the result into `draft_test_cases.json` as `endpoint_analysis`.
+- The analyzer detects bet topology and settlement parameter semantics before User Behavior templates are selected.
+
+Current `endpoint_analysis` shape:
+
+```json
+{
+  "endpoint_topology": {
+    "authenticate": {
+      "mode": "endpoint_present",
+      "endpoint_count": 1,
+      "endpoints": ["/api/v1/vendor/authenticate"]
+    },
+    "bet": {
+      "mode": "one_bet_endpoint",
+      "endpoint_count": 1,
+      "endpoints": ["/api/v1/vendor/bet"],
+      "action_parameters": ["action"]
+    },
+    "settlement": {
+      "mode": "has_round_end_control_parameter",
+      "endpoint_count": 1,
+      "endpoints": ["/api/v1/vendor/result"],
+      "round_end_control_parameters": ["roundCompleted"],
+      "status_parameters": ["status"],
+      "jackpot_parameters": ["jackpotAmount"]
+    },
+    "bet_and_settle": {
+      "mode": "combined_endpoint",
+      "endpoint_count": 1,
+      "endpoints": ["/api/v1/vendor/betAndResult"]
+    }
+  },
+  "parameter_semantics": {
+    "action_control": true,
+    "round_end_control": true,
+    "settlement_status": true,
+    "round_identifier": true,
+    "idempotency_key": true,
+    "combined_bet_settlement": true,
+    "jackpot_control": true
+  }
+}
+```
+
+Template selection should use this order:
+
+```text
+capability_profile.supports
+  -> endpoint_analysis.endpoint_topology
+  -> endpoint_analysis.settlement_target
+  -> endpoint_analysis.parameter_semantics
+  -> User_Behavior_map.xmind template variant
+```
+
+Examples:
+
+- `endpoint_topology.authenticate.mode=endpoint_present` → select conditional mandatory `Authenticate/test cases`.
+- `supports.multiple_bets=true` + `endpoint_topology.bet.mode=one_bet_endpoint` → select `multiple_bets/one_bet_endpoint/test cases`.
+- `supports.multiple_bets=true` + `endpoint_topology.bet.mode=two_bet_endpoint` → select `multiple_bets/two_bet_endpoint/test cases`.
+- `supports.multiple_settlements=true` + `parameter_semantics.round_end_control=true` → select `multiple_settlements/has_round_end_control_parameter`.
+- `supports.multiple_settlements=true` + `parameter_semantics.round_end_control=false` → select `multiple_settlements/no_round_end_control_parameter`.
+- `supports.multiple_settlements=true` + `settlement_target=settle_by_round` + `parameter_semantics.round_end_control=true` → select `Settlement/settle_by_round/multiple_settlements/has_round_end_control_parameter`.
+- `supports.multiple_settlements=true` + `settlement_target=settle_by_bet` + `parameter_semantics.round_end_control=false` → select `Settlement/settle_by_bet/multiple_settlements/no_round_end_control_parameter`.
+- `supports.jackpot=true` + `parameter_semantics.jackpot_control=true` → select `Settlement/<target>/jackpot`.
+- `endpoint_topology.bet_and_settle.mode=combined_endpoint` → select conditional mandatory `bet_and_settle`.
+- `endpoint_topology.bet_and_settle.mode=combined_endpoint` + `parameter_semantics.round_end_control=true` → select `bet_and_settle/has_round_end_control_parameter`.
+- `endpoint_topology.bet_and_settle.mode=combined_endpoint` + `parameter_semantics.round_end_control=false` → select `bet_and_settle/no_round_end_control_parameter`.
 
 `ENDPOINT_ROLE_RULES` maps `endpoint path → role`. User Behavior generation needs the **reverse**:
 
@@ -480,9 +670,9 @@ This requires knowing:
 - `bet` category → find role=`bet` endpoint
 - `settlement` category → find role=`settlement` or role=`combined_bet_settlement` endpoint
 - `rollback` category → find role=`cancel_bet` or role=`rollback` endpoint
-- `bet_and_settle` → needs bet endpoint + settlement endpoint together
+- `bet_and_settle` → needs role=`combined_bet_settlement`
 
-This reverse lookup logic does not exist yet.
+The analyzer is only the first pass. A later template loader still needs to consume `endpoint_analysis` and resolve exact endpoint placeholders for each User Behavior flow.
 
 #### Requirement 6: Draft Validator Extension for User Behavior
 
@@ -499,7 +689,7 @@ Recommended order:
 ```text
 Requirement 1: Scenario Templates XMind (manually write, then decompose via xmind_reader)
     ↓
-Requirement 5: Category → Endpoint reverse mapping (find the correct endpoints)
+Requirement 5: Extend endpoint analyzer + category → endpoint reverse mapping (topology/semantics first, exact placeholder resolution later)
     ↓
 Requirement 3: Capability-Driven Error Selection (decide success/failure + error codes by capability)
     ↓
@@ -510,7 +700,7 @@ Requirement 6: Validator extension (add User Behavior validation rules)
 
 Note: Requirement 2 (Reference Case Loader) is naturally resolved by Requirement 1 — the scenario templates XMind, once decomposed, already serves as the abstracted reference cases.
 
-**Blocking dependency:** Python code changes (template_loader.py, reverse mapping, error selection, flow builder, validator) must wait until the scenario templates XMind is complete and decomposed into `xmind_detail/scenario_templates/`. No Python code should be written before the XMind template is ready.
+**Blocking dependency:** Full User Behavior generation still waits for the Scenario Templates XMind to be complete and decomposed into `xmind_detail/scenario_templates/`. Endpoint analysis and schema preparation can be implemented earlier because they define how templates will be filtered.
 
 ## Supplementary PDF / URL Readers
 
@@ -688,6 +878,11 @@ Each generated test case should use structured fields, not only free text:
   "output_section": "User Behavior > Bet and Settle",
   "module": "Bet and Settle",
   "category": "multiple_bets",
+  "template_variant": "one_bet_endpoint",
+  "applicability": {
+    "required_capabilities": ["multiple_bets"],
+    "endpoint_topology": "one_bet_endpoint"
+  },
   "scenario": "Place two bets in the same round",
   "preconditions": "前置条件：\n...",
   "steps": [

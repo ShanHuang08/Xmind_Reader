@@ -8,6 +8,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from generator.endpoint_analyzer import analyze_endpoint_topology
+
 
 FALLBACK_GAME_CODES = {
     "Esoterica": "ESOTERICA_burningSlot5",
@@ -35,10 +37,16 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "settlement": "User Behavior > Bet and Settle",
     "amount_precision": "User Behavior > Bet and Settle",
     "multiple_bets": "User Behavior > Bet and Settle",
+    "multiple_bets_one_bet_endpoint": "User Behavior > Bet and Settle",
+    "multiple_bets_two_bet_endpoint": "User Behavior > Bet and Settle",
     "multiple_settlements": "User Behavior > Bet and Settle",
+    "multiple_settlements_has_round_end_control_parameter": "User Behavior > Bet and Settle",
+    "multiple_settlements_no_round_end_control_parameter": "User Behavior > Bet and Settle",
     "modify_settlement_adjustment": "User Behavior > Bet and Settle",
     "settle_by_round_or_settle_by_bet": "User Behavior > Bet and Settle",
     "bet_and_settle": "User Behavior > Bet and Settle",
+    "bet_and_settle_has_round_end_control_parameter": "User Behavior > Bet and Settle",
+    "bet_and_settle_no_round_end_control_parameter": "User Behavior > Bet and Settle",
     "betandsettle": "User Behavior > Bet and Settle",
     "idempotency": "User Behavior > Bet and Settle",
     "rollback": "User Behavior > Cancel Bet",
@@ -87,6 +95,7 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
     game_codes_path = vendor_dir / "game_codes.json"
     game_codes = _read_json(game_codes_path) if game_codes_path.exists() else _extract_game_codes_from_raw(vendor_dir)
 
+    endpoint_roles = [_endpoint_role(endpoint) for endpoint in endpoints]
     draft = {
         "schema_version": "draft-test-cases/v1",
         "status": "draft_context_only",
@@ -105,7 +114,8 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
         "capability_profile": capability_profile,
         "vendor_master_checklist": checklist,
         "game_codes": game_codes,
-        "endpoint_roles": [_endpoint_role(endpoint) for endpoint in endpoints],
+        "endpoint_roles": endpoint_roles,
+        "endpoint_analysis": analyze_endpoint_topology(endpoint_roles),
         "error_codes": error_codes,
         "supplementary_sources": _supplementary_sources(vendor_dir),
         "case_authoring_rules": _case_authoring_rules(vendor, endpoints, game_codes),
@@ -204,26 +214,167 @@ def _generation_mapping() -> dict[str, Any]:
             "rollback",
             "amount_precision",
         ],
+        "conditional_mandatory_user_behavior_categories": [
+            {
+                "category": "authenticate",
+                "output_section": "User Behavior > Launch Game",
+                "condition": "endpoint_analysis.endpoint_topology.authenticate.mode == endpoint_present",
+                "description": (
+                    "Authenticate cases are selected only when the vendor API doc contains "
+                    "an authentication/authenticate endpoint."
+                ),
+            },
+            {
+                "category": "bet_and_settle",
+                "output_section": "User Behavior > Bet and Settle",
+                "condition": "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint",
+                "description": (
+                    "BetAndSettle mandatory cases are selected only when the vendor API doc contains "
+                    "a combined bet-and-settlement endpoint."
+                ),
+            },
+            {
+                "category": "bet_and_settle_has_round_end_control_parameter",
+                "output_section": "User Behavior > Bet and Settle",
+                "condition": (
+                    "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint "
+                    "and endpoint_analysis.parameter_semantics.round_end_control == true"
+                ),
+                "description": (
+                    "BetAndSettle cases for combined endpoints that include a round-end control parameter."
+                ),
+            },
+            {
+                "category": "bet_and_settle_no_round_end_control_parameter",
+                "output_section": "User Behavior > Bet and Settle",
+                "condition": (
+                    "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint "
+                    "and endpoint_analysis.parameter_semantics.round_end_control == false"
+                ),
+                "description": (
+                    "BetAndSettle cases for combined endpoints without an explicit round-end control parameter."
+                ),
+            },
+        ],
         "capability_specific_categories": [
             "multiple_bets",
+            "multiple_bets_one_bet_endpoint",
+            "multiple_bets_two_bet_endpoint",
             "multiple_settlements",
+            "multiple_settlements_has_round_end_control_parameter",
+            "multiple_settlements_no_round_end_control_parameter",
             "modify_settlement_adjustment",
             "settle_by_round_or_settle_by_bet",
             "rollback_bet",
             "rollback_settled_bet",
             "rollback_by_round_or_rollback_by_bet",
-            "bet_and_settle",
             "rollback_bet_and_settle",
             "idempotency",
             "freespin",
             "jackpot",
         ],
+        "capability_category_variants": {
+            "multiple_bets": [
+                {
+                    "category": "multiple_bets_one_bet_endpoint",
+                    "template_variant": "one_bet_endpoint",
+                    "description": (
+                        "Use when the vendor performs multiple bets through the same bet endpoint. "
+                        "The endpoint may use an action/method parameter or repeated requests with the same round context."
+                    ),
+                    "applicability": {
+                        "required_capabilities": ["multiple_bets"],
+                        "endpoint_topology": "one_bet_endpoint",
+                    },
+                },
+                {
+                    "category": "multiple_bets_two_bet_endpoint",
+                    "template_variant": "two_bet_endpoint",
+                    "description": (
+                        "Use when the vendor performs multiple bets through two separated bet-like endpoints, "
+                        "such as Bet and Rebet."
+                    ),
+                    "applicability": {
+                        "required_capabilities": ["multiple_bets"],
+                        "endpoint_topology": "two_bet_endpoint",
+                    },
+                },
+            ],
+            "bet_and_settle": [
+                {
+                    "category": "bet_and_settle_has_round_end_control_parameter",
+                    "template_variant": "has_round_end_control_parameter",
+                    "description": (
+                        "Use when a combined bet-and-settlement endpoint exists and has a parameter that controls round completion."
+                    ),
+                    "applicability": {
+                        "required_endpoint_roles": ["combined_bet_settlement"],
+                        "required_parameter_semantics": [
+                            "combined_bet_settlement",
+                            "round_end_control",
+                        ],
+                        "parameter_semantics": {
+                            "combined_bet_settlement": True,
+                            "round_end_control": True,
+                        },
+                    },
+                },
+                {
+                    "category": "bet_and_settle_no_round_end_control_parameter",
+                    "template_variant": "no_round_end_control_parameter",
+                    "description": (
+                        "Use when a combined bet-and-settlement endpoint exists but has no explicit round-end control parameter."
+                    ),
+                    "applicability": {
+                        "required_endpoint_roles": ["combined_bet_settlement"],
+                        "required_parameter_semantics": ["combined_bet_settlement"],
+                        "parameter_semantics": {
+                            "combined_bet_settlement": True,
+                            "round_end_control": False,
+                        },
+                    },
+                },
+            ],
+            "multiple_settlements": [
+                {
+                    "category": "multiple_settlements_has_round_end_control_parameter",
+                    "template_variant": "has_round_end_control_parameter",
+                    "description": (
+                        "Use when the settlement/result endpoint has a parameter that controls whether the round is complete."
+                    ),
+                    "applicability": {
+                        "required_capabilities": ["multiple_settlements"],
+                        "required_endpoint_roles": ["settlement"],
+                        "required_parameter_semantics": ["round_end_control"],
+                        "parameter_semantics": {"round_end_control": True},
+                    },
+                },
+                {
+                    "category": "multiple_settlements_no_round_end_control_parameter",
+                    "template_variant": "no_round_end_control_parameter",
+                    "description": (
+                        "Use when multiple settlements are supported but the settlement/result endpoint has no round-end control parameter."
+                    ),
+                    "applicability": {
+                        "required_capabilities": ["multiple_settlements"],
+                        "required_endpoint_roles": ["settlement"],
+                        "parameter_semantics": {"round_end_control": False},
+                    },
+                },
+            ],
+        },
         "knowledge_category_to_xmind_section": KNOWLEDGE_CATEGORY_TO_XMIND_SECTION,
         "generated_xmind_structure": GENERATED_XMIND_STRUCTURE,
         "generated_case_routing_fields": [
             "category",
             "output_section",
             "endpoint_group",
+            "template_variant",
+            "applicability",
+            "behavior_flow",
+            "required_endpoint_roles",
+            "required_parameter_semantics",
+            "endpoint_analysis",
             "endpoints",
         ],
     }

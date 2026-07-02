@@ -32,7 +32,9 @@ def generate_test_cases_for_draft(
     are fully derivable from endpoint request parameter tables.
     """
     context = build_generation_context(draft)
-    categories = selected_categories(context.get("capability_profile", {}))
+    categories = selected_categories(
+        context.get("capability_profile", {}), context.get("endpoint_analysis", {})
+    )
     references = [str(path) for path in select_reference_files(xmind_detail_root, categories)]
     cases: list[dict[str, Any]] = []
 
@@ -118,9 +120,9 @@ def _parameter_case(
         "endpoint_group": endpoint.get("role", ""),
         "endpoints": [endpoint_name],
         "parameter": parameter_name,
-        "preconditions": _preconditions(context, endpoint, parameter),
+        "preconditions": _preconditions(context, endpoint),
         "steps": _parameter_steps(endpoint, parameter, expected_error),
-        "remarks": _remarks(endpoint),
+        "remarks": _remarks(endpoint, parameter),
         "expected_error": expected_error,
         "tags": ["parameter_validation", "negative"],
         "priority": "P2",
@@ -134,27 +136,27 @@ def _parameter_case(
 
 
 def _preconditions(
-    context: dict[str, Any], endpoint: dict[str, Any], parameter: dict[str, Any]
+    context: dict[str, Any], endpoint: dict[str, Any]
 ) -> str:
     endpoint_name = endpoint.get("endpoint", "")
     game_code = context.get("case_authoring_rules", {}).get("default_game_code") or "<confirm gameCode>"
-    request = _request_payload(endpoint, parameter.get("name", ""))
     return (
         f"{PRECONDITIONS_LABEL}\n"
         f"1. launch game {game_code}\n"
         f"2. url：{endpoint_name}\n"
         f"3. 测试账号：{context.get('default_test_account', '')}\n\n"
-        "API request parameters：\n"
-        "<code>\n"
-        f"{request}\n"
-        "</code>"
     )
 
 
-def _remarks(endpoint: dict[str, Any]) -> str:
+def _remarks(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
+    request = _request_payload(endpoint, parameter.get("name", ""))
     response = _response_payload(endpoint)
     return (
         f"{REMARKS_LABEL}\n"
+        "API request parameters：\n"
+        "<code>\n"
+        f"{request}\n"
+        "</code>\n"
         "Success response：\n"
         "<code>\n"
         f"{response}\n"
@@ -232,6 +234,15 @@ def _parameter_steps(
         steps.append(
             _step_case("userId input space", '"userId": " playerA "', code, error_response)
         )
+    if _is_player_name_parameter(parameter_name):
+        steps.append(
+            _step_case(
+                f"{parameter_name} input uppercase",
+                f'"{parameter_name}": "PLAYERA"',
+                code,
+                error_response,
+            )
+        )
     if lowered == "roundid":
         steps.append(
             _step_case("roundId input space", '"roundId": " 123 "', code, error_response)
@@ -300,6 +311,31 @@ def _wrong_value_request_line(parameter: dict[str, Any]) -> str:
     if "bool" in param_type:
         return f'"{name}": "test"'
     return f'"{name}": 123'
+
+
+def _is_player_name_parameter(parameter_name: str) -> bool:
+    normalized = "".join(ch for ch in parameter_name.lower() if ch.isalnum())
+    exact_names = {
+        "userid",
+        "username",
+        "user",
+        "playerid",
+        "playername",
+        "player",
+        "memberid",
+        "membername",
+        "account",
+        "accountid",
+        "accountname",
+        "loginname",
+    }
+    if normalized in exact_names:
+        return True
+    player_terms = ("player", "user", "member", "account", "login")
+    name_terms = ("name", "id")
+    return any(term in normalized for term in player_terms) and any(
+        term in normalized for term in name_terms
+    )
 
 
 def _endpoint_display_name(endpoint_path: str) -> str:
