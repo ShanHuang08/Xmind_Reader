@@ -24,10 +24,20 @@
 
 ## 安裝方式
 
+### Windows
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+### macOS / Linux
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
 ```
 
 主要依賴：`lxml`、`python-docx`、`beautifulsoup4`、`markdownify`、`pymupdf4llm`。
@@ -36,6 +46,8 @@ pip install -r requirements.txt
 ## 執行方式
 
 統一透過 `main.py` 進入，支援五個子命令：
+
+> macOS / Linux 若沒有 `python` 指令，請將以下範例中的 `python` 改為 `python3`，例如 `python3 main.py xmind`。
 
 ### XMind 知識庫讀取
 
