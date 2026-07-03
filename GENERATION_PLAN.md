@@ -147,14 +147,19 @@ Conditional mandatory test cases:
 - `authenticate`
   - Select only when the API doc contains an authenticate/authentication endpoint.
   - Route to `User Behavior > Launch Game`.
-  - In `User_Behavior_map.xmind`, use `Authenticate > test cases`.
+  - In `User_Behavior_map.xmind`, use `Authenticate > Mandatory > test cases`.
+  - When an authenticate endpoint is detected, load all cases under `Authenticate > Mandatory`.
+- `authentication_is_necessary`
+  - Select only when the API doc confirms authentication is required, for example skipping authenticate returns an unauthenticated / unauthorized / invalid token / missing session error.
+  - Route to `User Behavior > Bet and Settle`.
+  - Current template scope is `Bet without authenticate`, so this category is forced into Bet and Settle for now.
+  - In `User_Behavior_map.xmind`, use `Authenticate > Authentication is necessary > test cases`.
 - `bet_and_settle`
   - Select only when the API doc contains a combined bet-and-settlement endpoint.
   - Route to `User Behavior > Bet and Settle`.
   - In `User_Behavior_map.xmind`, keep this separate from normal `bet` and `settlement` templates because not every vendor supports a combined endpoint.
-  - Because BetAndSettle includes settlement behavior, split it by settlement parameter semantics:
-    - `bet_and_settle_has_round_end_control_parameter`
-    - `bet_and_settle_no_round_end_control_parameter`
+  - `bet_and_settle_has_round_end_control_parameter` is selected when the combined endpoint has a round-end control parameter.
+  - The no-round-end-control variant is intentionally not selected for now.
 
 Capability-specific categories:
 
@@ -172,7 +177,17 @@ Capability-specific categories:
 - `rollback_bet_and_settle`
 - `idempotency`
 - `freespin`
+  - Select only when the Bet or Settlement endpoint request parameters include freespin-related fields.
+  - Vendors may put freespin control on bet, settlement/result, or combined bet-and-settle endpoints.
+  - Do not select freespin templates from `capability_profile.supports.free_spin` alone.
 - `jackpot`
+
+Reserved categories:
+
+- `Special test cases`
+  - Reserved for future template expansion in `User_Behavior_map.xmind`.
+  - Do not select or generate these cases yet.
+  - The current selector must skip this branch even when child node names overlap with existing categories such as `bet`, `settlement`, or `rollback`.
 
 Codex should select category chunks based on `capability_profile.json` and `draft_test_cases.json`.
 
@@ -187,10 +202,11 @@ Examples:
 - If adjustment is supported, load `user_behavior/modify_settlement_adjustment` reference cases.
 - For all vendors, always load mandatory cases: launch game, balance, bet, settlement, rollback, and amount precision.
 - If `jackpot=true` and the settlement/result endpoint has jackpot-related request parameters, load `user_behavior/jackpot` reference cases.
-- If `endpoint_analysis.endpoint_topology.authenticate.mode=endpoint_present`, load conditional mandatory `user_behavior/authenticate` reference cases.
+- If the bet or settlement/result endpoint has freespin-related request parameters, load `user_behavior/freespin` reference cases.
+- If `endpoint_analysis.endpoint_topology.authenticate.mode=endpoint_present`, load all conditional mandatory `user_behavior/authenticate/Mandatory` reference cases.
+- If `endpoint_analysis.endpoint_topology.authenticate.authentication_required=true`, also load `user_behavior/authenticate/Authentication is necessary` reference cases.
 - If `endpoint_analysis.endpoint_topology.bet_and_settle.mode=combined_endpoint`, load conditional mandatory `user_behavior/bet_and_settle` reference cases.
 - If BetAndSettle has a round-end control parameter, prefer `user_behavior/bet_and_settle/has_round_end_control_parameter`.
-- If BetAndSettle has no round-end control parameter, prefer `user_behavior/bet_and_settle/no_round_end_control_parameter`.
 
 The generator should not decide reference cases by endpoint name alone. Endpoint names vary by vendor, while categories describe reusable test intent.
 
@@ -327,6 +343,7 @@ Category to generated XMind section mapping:
 | `parameter_validation` | `API parameter test` |
 | `launch_game` | `User Behavior > Launch Game` |
 | `authenticate` | `User Behavior > Launch Game` |
+| `authentication_is_necessary` | `User Behavior > Bet and Settle` |
 | `balance` | `User Behavior > Get Player balance` |
 | `bet` | `User Behavior > Bet and Settle` |
 | `settlement` | `User Behavior > Bet and Settle` |
@@ -341,7 +358,6 @@ Category to generated XMind section mapping:
 | `settle_by_round_or_settle_by_bet` | `User Behavior > Bet and Settle` |
 | `bet_and_settle` / `betandsettle` | `User Behavior > Bet and Settle` |
 | `bet_and_settle_has_round_end_control_parameter` | `User Behavior > Bet and Settle` |
-| `bet_and_settle_no_round_end_control_parameter` | `User Behavior > Bet and Settle` |
 | `idempotency` | `User Behavior > Bet and Settle` |
 | `rollback` | `User Behavior > Cancel Bet` |
 | `rollback_bet` | `User Behavior > Cancel Bet` |
@@ -478,13 +494,15 @@ Scenario Templates
 │   └── Amount Precision
 │       └── ...
 ├── Conditional Mandatory: bet_and_settle  ← only selected when a combined bet-and-settlement endpoint exists
-│   ├── has_round_end_control_parameter
-│   │   └── case：full bet+settle flow with round-end control
-│   └── no_round_end_control_parameter
-│       └── case：full bet+settle flow without explicit round closure
-├── Conditional Mandatory: Authenticate    ← only selected when an authenticate endpoint exists
-│   └── test cases
-│       └── case：authenticate player successfully
+│   └── has_round_end_control_parameter
+│       └── case：full bet+settle flow with round-end control
+├── Conditional Mandatory: Authenticate    ← selected when an authenticate endpoint exists
+│   ├── Mandatory                         ← when endpoint exists, select all cases here
+│   │   └── test cases
+│   │       └── case：authenticate player successfully
+│   └── Authentication is necessary        ← selected only when API doc confirms authenticate is required
+│       └── test cases
+│           └── case：skip authenticate and call wallet API returns authentication error
 ├── Capability: multiple_bets              ← only selected when supports.multiple_bets=true
 │   ├── one_bet_endpoint                   ← same bet endpoint; may use action/method parameter
 │   │   └── test cases
@@ -502,6 +520,8 @@ Scenario Templates
 ├── Capability: modify_settlements_adjustment
 │   └── ...
 ├── Capability: free_spin
+│   └── ...
+├── Special test cases                    ← reserved for future expansion; do not select yet
 │   └── ...
 ```
 
@@ -605,13 +625,16 @@ Current `endpoint_analysis` shape:
     "authenticate": {
       "mode": "endpoint_present",
       "endpoint_count": 1,
-      "endpoints": ["/api/v1/vendor/authenticate"]
+      "endpoints": ["/api/v1/vendor/authenticate"],
+      "authentication_required": true,
+      "required_evidence": ["error_code:401:Invalid token"]
     },
     "bet": {
       "mode": "one_bet_endpoint",
       "endpoint_count": 1,
       "endpoints": ["/api/v1/vendor/bet"],
-      "action_parameters": ["action"]
+      "action_parameters": ["action"],
+      "free_spin_parameters": ["freeSpinId"]
     },
     "settlement": {
       "mode": "has_round_end_control_parameter",
@@ -619,7 +642,8 @@ Current `endpoint_analysis` shape:
       "endpoints": ["/api/v1/vendor/result"],
       "round_end_control_parameters": ["roundCompleted"],
       "status_parameters": ["status"],
-      "jackpot_parameters": ["jackpotAmount"]
+      "jackpot_parameters": ["jackpotAmount"],
+      "free_spin_parameters": ["freeSpinId"]
     },
     "bet_and_settle": {
       "mode": "combined_endpoint",
@@ -634,7 +658,8 @@ Current `endpoint_analysis` shape:
     "round_identifier": true,
     "idempotency_key": true,
     "combined_bet_settlement": true,
-    "jackpot_control": true
+    "jackpot_control": true,
+    "free_spin_control": true
   }
 }
 ```
@@ -651,7 +676,8 @@ capability_profile.supports
 
 Examples:
 
-- `endpoint_topology.authenticate.mode=endpoint_present` → select conditional mandatory `Authenticate/test cases`.
+- `endpoint_topology.authenticate.mode=endpoint_present` → select conditional mandatory `Authenticate/Mandatory/test cases`.
+- `endpoint_topology.authenticate.authentication_required=true` → select conditional mandatory `Authenticate/Authentication is necessary/test cases`.
 - `supports.multiple_bets=true` + `endpoint_topology.bet.mode=one_bet_endpoint` → select `multiple_bets/one_bet_endpoint/test cases`.
 - `supports.multiple_bets=true` + `endpoint_topology.bet.mode=two_bet_endpoint` → select `multiple_bets/two_bet_endpoint/test cases`.
 - `supports.multiple_settlements=true` + `parameter_semantics.round_end_control=true` → select `multiple_settlements/has_round_end_control_parameter`.
@@ -659,9 +685,9 @@ Examples:
 - `supports.multiple_settlements=true` + `settlement_target=settle_by_round` + `parameter_semantics.round_end_control=true` → select `Settlement/settle_by_round/multiple_settlements/has_round_end_control_parameter`.
 - `supports.multiple_settlements=true` + `settlement_target=settle_by_bet` + `parameter_semantics.round_end_control=false` → select `Settlement/settle_by_bet/multiple_settlements/no_round_end_control_parameter`.
 - `supports.jackpot=true` + `parameter_semantics.jackpot_control=true` → select `Settlement/<target>/jackpot`.
+- `parameter_semantics.free_spin_control=true` → select `freespin`; this may come from bet, settlement/result, or combined bet-and-settle request parameters.
 - `endpoint_topology.bet_and_settle.mode=combined_endpoint` → select conditional mandatory `bet_and_settle`.
 - `endpoint_topology.bet_and_settle.mode=combined_endpoint` + `parameter_semantics.round_end_control=true` → select `bet_and_settle/has_round_end_control_parameter`.
-- `endpoint_topology.bet_and_settle.mode=combined_endpoint` + `parameter_semantics.round_end_control=false` → select `bet_and_settle/no_round_end_control_parameter`.
 
 `ENDPOINT_ROLE_RULES` maps `endpoint path → role`. User Behavior generation needs the **reverse**:
 

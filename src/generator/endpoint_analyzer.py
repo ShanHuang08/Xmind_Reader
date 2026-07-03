@@ -10,6 +10,30 @@ SETTLEMENT_ROLES = {"settlement", "combined_bet_settlement"}
 COMBINED_BET_SETTLEMENT_ROLES = {"combined_bet_settlement"}
 AUTHENTICATION_ROLES = {"authentication"}
 
+AUTHENTICATION_REQUIRED_TERMS = {
+    "authentication required",
+    "authentication is required",
+    "authentication is necessary",
+    "authentication is mandatory",
+    "authenticate required",
+    "authenticate is required",
+    "authenticate first",
+    "must authenticate",
+    "must call authenticate",
+    "call authenticate before",
+    "not authenticated",
+    "unauthenticated",
+    "unauthorized",
+    "invalid token",
+    "missing token",
+    "token required",
+    "token is required",
+    "invalid session",
+    "missing session",
+    "session required",
+    "session is required",
+}
+
 ACTION_CONTROL_NAMES = {
     "action",
     "method",
@@ -79,8 +103,27 @@ JACKPOT_CONTROL_NAMES = {
     "jpamount",
 }
 
+FREESPIN_CONTROL_NAMES = {
+    "freespin",
+    "freespins",
+    "freegame",
+    "freegames",
+    "freebet",
+    "freebets",
+    "bonusid",
+    "bonuscode",
+    "campaignid",
+    "campaigncode",
+    "promotionid",
+    "promoid",
+    "featureid",
+    "featurecode",
+}
 
-def analyze_endpoint_topology(endpoint_roles: list[dict[str, Any]]) -> dict[str, Any]:
+
+def analyze_endpoint_topology(
+    endpoint_roles: list[dict[str, Any]], error_codes: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Analyze endpoint roles/parameters before selecting User Behavior templates."""
     bet_endpoints = _endpoints_by_role(endpoint_roles, BET_ROLES)
     settlement_endpoints = _endpoints_by_role(endpoint_roles, SETTLEMENT_ROLES)
@@ -88,6 +131,9 @@ def analyze_endpoint_topology(endpoint_roles: list[dict[str, Any]]) -> dict[str,
         endpoint_roles, COMBINED_BET_SETTLEMENT_ROLES
     )
     authentication_endpoints = _endpoints_by_role(endpoint_roles, AUTHENTICATION_ROLES)
+    authentication_required_evidence = _authentication_required_evidence(
+        endpoint_roles, error_codes or []
+    )
     all_parameters = [
         parameter
         for endpoint in endpoint_roles
@@ -103,6 +149,15 @@ def analyze_endpoint_topology(endpoint_roles: list[dict[str, Any]]) -> dict[str,
     settlement_jackpot_parameters = _matching_parameter_names(
         settlement_endpoints, JACKPOT_CONTROL_NAMES
     )
+    bet_free_spin_parameters = _matching_parameter_names_or_text(
+        bet_endpoints, FREESPIN_CONTROL_NAMES
+    )
+    settlement_free_spin_parameters = _matching_parameter_names_or_text(
+        settlement_endpoints, FREESPIN_CONTROL_NAMES
+    )
+    free_spin_parameters = sorted(
+        set(bet_free_spin_parameters + settlement_free_spin_parameters)
+    )
 
     return {
         "endpoint_topology": {
@@ -114,12 +169,17 @@ def analyze_endpoint_topology(endpoint_roles: list[dict[str, Any]]) -> dict[str,
                 "endpoints": [
                     endpoint.get("endpoint", "") for endpoint in authentication_endpoints
                 ],
+                "authentication_required": bool(
+                    authentication_endpoints and authentication_required_evidence
+                ),
+                "required_evidence": authentication_required_evidence,
             },
             "bet": {
                 "mode": _bet_topology_mode(bet_endpoints, bet_action_parameters),
                 "endpoint_count": len(bet_endpoints),
                 "endpoints": [endpoint.get("endpoint", "") for endpoint in bet_endpoints],
                 "action_parameters": bet_action_parameters,
+                "free_spin_parameters": bet_free_spin_parameters,
             },
             "settlement": {
                 "mode": "has_round_end_control_parameter"
@@ -130,6 +190,7 @@ def analyze_endpoint_topology(endpoint_roles: list[dict[str, Any]]) -> dict[str,
                 "round_end_control_parameters": settlement_round_end_parameters,
                 "status_parameters": settlement_status_parameters,
                 "jackpot_parameters": settlement_jackpot_parameters,
+                "free_spin_parameters": settlement_free_spin_parameters,
             },
             "bet_and_settle": {
                 "mode": "combined_endpoint"
@@ -150,9 +211,55 @@ def analyze_endpoint_topology(endpoint_roles: list[dict[str, Any]]) -> dict[str,
             "idempotency_key": bool(_matching_names(all_parameters, IDEMPOTENCY_NAMES)),
             "combined_bet_settlement": bool(combined_bet_settlement_endpoints),
             "authentication": bool(authentication_endpoints),
+            "authentication_required": bool(
+                authentication_endpoints and authentication_required_evidence
+            ),
             "jackpot_control": bool(settlement_jackpot_parameters),
+            "free_spin_control": bool(free_spin_parameters),
         },
     }
+
+
+def _authentication_required_evidence(
+    endpoint_roles: list[dict[str, Any]], error_codes: list[dict[str, Any]]
+) -> list[str]:
+    evidence = []
+    for item in error_codes:
+        text = _searchable_text(item)
+        if _mentions_authentication_requirement(text):
+            evidence.append(_compact_evidence("error_code", item))
+
+    for endpoint in endpoint_roles:
+        text = _searchable_text(endpoint)
+        if _mentions_authentication_requirement(text):
+            evidence.append(_compact_evidence("endpoint", endpoint))
+
+    return sorted(set(item for item in evidence if item))
+
+
+def _mentions_authentication_requirement(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in AUTHENTICATION_REQUIRED_TERMS)
+
+
+def _searchable_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return " ".join(_searchable_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(_searchable_text(item) for item in value)
+    return str(value)
+
+
+def _compact_evidence(source: str, item: dict[str, Any]) -> str:
+    if source == "error_code":
+        code = str(item.get("code", "")).strip()
+        context = str(
+            item.get("context") or item.get("message") or item.get("description") or ""
+        ).strip()
+        return f"error_code:{code}:{context[:160]}".strip(":")
+    endpoint = str(item.get("endpoint", "")).strip()
+    section = str(item.get("section", "")).strip()
+    return f"endpoint:{endpoint}:{section[:120]}".strip(":")
 
 
 def _endpoints_by_role(
@@ -185,6 +292,26 @@ def _matching_parameter_names(
         if isinstance(parameter, dict)
     ]
     return _matching_names(parameters, normalized_names)
+
+
+def _matching_parameter_names_or_text(
+    endpoints: list[dict[str, Any]], normalized_names: set[str]
+) -> list[str]:
+    parameters = [
+        parameter
+        for endpoint in endpoints
+        for parameter in endpoint.get("request_parameters", [])
+        if isinstance(parameter, dict)
+    ]
+    matches = []
+    for parameter in parameters:
+        name = str(parameter.get("name", "")).strip()
+        if not name:
+            continue
+        searchable = _normalize_name(_searchable_text(parameter))
+        if any(term in searchable for term in normalized_names):
+            matches.append(name)
+    return sorted(set(matches))
 
 
 def _matching_names(parameters: list[dict[str, Any]], normalized_names: set[str]) -> list[str]:

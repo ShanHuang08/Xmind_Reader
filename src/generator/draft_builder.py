@@ -32,6 +32,7 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "parameter_validation": "API parameter test",
     "launch_game": "User Behavior > Launch Game",
     "authenticate": "User Behavior > Launch Game",
+    "authentication_is_necessary": "User Behavior > Bet and Settle",
     "balance": "User Behavior > Get Player balance",
     "bet": "User Behavior > Bet and Settle",
     "settlement": "User Behavior > Bet and Settle",
@@ -46,7 +47,6 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "settle_by_round_or_settle_by_bet": "User Behavior > Bet and Settle",
     "bet_and_settle": "User Behavior > Bet and Settle",
     "bet_and_settle_has_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "bet_and_settle_no_round_end_control_parameter": "User Behavior > Bet and Settle",
     "betandsettle": "User Behavior > Bet and Settle",
     "idempotency": "User Behavior > Bet and Settle",
     "rollback": "User Behavior > Cancel Bet",
@@ -115,7 +115,7 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
         "vendor_master_checklist": checklist,
         "game_codes": game_codes,
         "endpoint_roles": endpoint_roles,
-        "endpoint_analysis": analyze_endpoint_topology(endpoint_roles),
+        "endpoint_analysis": analyze_endpoint_topology(endpoint_roles, error_codes),
         "error_codes": error_codes,
         "supplementary_sources": _supplementary_sources(vendor_dir),
         "case_authoring_rules": _case_authoring_rules(vendor, endpoints, game_codes),
@@ -145,6 +145,8 @@ def _endpoint_role(endpoint: dict[str, Any]) -> dict[str, Any]:
         "endpoint": path,
         "role": role,
         "generation_note": generation_note,
+        "section": endpoint.get("section", ""),
+        "keywords": endpoint.get("keywords", []),
         "request_parameters": endpoint.get("request_parameters", []),
         "response_parameters": endpoint.get("response_parameters", []),
         "request_example": endpoint.get("request_example", {}),
@@ -220,8 +222,21 @@ def _generation_mapping() -> dict[str, Any]:
                 "output_section": "User Behavior > Launch Game",
                 "condition": "endpoint_analysis.endpoint_topology.authenticate.mode == endpoint_present",
                 "description": (
-                    "Authenticate cases are selected only when the vendor API doc contains "
-                    "an authentication/authenticate endpoint."
+                    "All Authenticate mandatory cases are selected when the vendor API doc "
+                    "contains an authentication/authenticate endpoint."
+                ),
+            },
+            {
+                "category": "authentication_is_necessary",
+                "output_section": "User Behavior > Bet and Settle",
+                "condition": (
+                    "endpoint_analysis.endpoint_topology.authenticate.mode == endpoint_present "
+                    "and endpoint_analysis.endpoint_topology.authenticate.authentication_required == true"
+                ),
+                "description": (
+                    "Authentication-is-necessary cases are selected only when the API doc "
+                    "confirms that authenticate is required and skipping it returns an error. "
+                    "Current templates route Bet-without-authenticate coverage to Bet and Settle."
                 ),
             },
             {
@@ -242,17 +257,6 @@ def _generation_mapping() -> dict[str, Any]:
                 ),
                 "description": (
                     "BetAndSettle cases for combined endpoints that include a round-end control parameter."
-                ),
-            },
-            {
-                "category": "bet_and_settle_no_round_end_control_parameter",
-                "output_section": "User Behavior > Bet and Settle",
-                "condition": (
-                    "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint "
-                    "and endpoint_analysis.parameter_semantics.round_end_control == false"
-                ),
-                "description": (
-                    "BetAndSettle cases for combined endpoints without an explicit round-end control parameter."
                 ),
             },
         ],
@@ -316,21 +320,6 @@ def _generation_mapping() -> dict[str, Any]:
                         "parameter_semantics": {
                             "combined_bet_settlement": True,
                             "round_end_control": True,
-                        },
-                    },
-                },
-                {
-                    "category": "bet_and_settle_no_round_end_control_parameter",
-                    "template_variant": "no_round_end_control_parameter",
-                    "description": (
-                        "Use when a combined bet-and-settlement endpoint exists but has no explicit round-end control parameter."
-                    ),
-                    "applicability": {
-                        "required_endpoint_roles": ["combined_bet_settlement"],
-                        "required_parameter_semantics": ["combined_bet_settlement"],
-                        "parameter_semantics": {
-                            "combined_bet_settlement": True,
-                            "round_end_control": False,
                         },
                     },
                 },

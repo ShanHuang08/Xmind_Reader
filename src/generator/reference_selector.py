@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,19 @@ CONDITIONAL_MANDATORY_CATEGORY_RULES = {
                 "path": ("endpoint_topology", "authenticate", "mode"),
                 "required_value": "endpoint_present",
             }
+        ],
+    },
+    "authentication_is_necessary": {
+        "category": "authentication_is_necessary",
+        "conditions": [
+            {
+                "path": ("endpoint_topology", "authenticate", "mode"),
+                "required_value": "endpoint_present",
+            },
+            {
+                "path": ("endpoint_topology", "authenticate", "authentication_required"),
+                "required_value": True,
+            },
         ],
     },
     "bet_and_settle": {
@@ -47,19 +61,6 @@ CONDITIONAL_MANDATORY_CATEGORY_RULES = {
             },
         ],
     },
-    "bet_and_settle_no_round_end_control_parameter": {
-        "category": "bet_and_settle_no_round_end_control_parameter",
-        "conditions": [
-            {
-                "path": ("endpoint_topology", "bet_and_settle", "mode"),
-                "required_value": "combined_endpoint",
-            },
-            {
-                "path": ("parameter_semantics", "round_end_control"),
-                "required_value": False,
-            },
-        ],
-    },
 }
 
 CAPABILITY_CATEGORY_RULES = {
@@ -72,8 +73,11 @@ CAPABILITY_CATEGORY_RULES = {
     "rollback_settlements": "rollback_settled_bet",
     "modify_settlements_adjustment": "modify_settlement_adjustment",
     "cancel_bet": "rollback_bet",
-    "free_spin": "freespin",
     "idempotency": "idempotency",
+}
+
+RESERVED_TEMPLATE_BRANCHES = {
+    "special_test_cases",
 }
 
 
@@ -103,6 +107,8 @@ def selected_categories(
         analysis, ("parameter_semantics", "jackpot_control")
     ):
         categories.add("jackpot")
+    if _nested_value(analysis, ("parameter_semantics", "free_spin_control")):
+        categories.add("freespin")
     return sorted(categories)
 
 
@@ -140,6 +146,8 @@ def select_reference_files(xmind_detail_root: Path | str, categories: list[str])
             if not path.is_file():
                 continue
             path_keys = _path_category_keys(path, root)
+            if RESERVED_TEMPLATE_BRANCHES.intersection(path_keys):
+                continue
             if category_terms.intersection(path_keys):
                 matches.append(path)
     return sorted(matches)
@@ -172,4 +180,5 @@ def _first_marker_index(parts: list[str]) -> int | None:
 
 
 def _normalize_part(part: str) -> str:
-    return Path(part).stem.lower().replace("-", "_")
+    text = Path(part).stem.lower()
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")

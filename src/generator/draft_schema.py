@@ -69,6 +69,7 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "parameter_validation": "API parameter test",
     "launch_game": "User Behavior > Launch Game",
     "authenticate": "User Behavior > Launch Game",
+    "authentication_is_necessary": "User Behavior > Bet and Settle",
     "balance": "User Behavior > Get Player balance",
     "bet": "User Behavior > Bet and Settle",
     "settlement": "User Behavior > Bet and Settle",
@@ -83,7 +84,6 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "settle_by_round_or_settle_by_bet": "User Behavior > Bet and Settle",
     "bet_and_settle": "User Behavior > Bet and Settle",
     "bet_and_settle_has_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "bet_and_settle_no_round_end_control_parameter": "User Behavior > Bet and Settle",
     "betandsettle": "User Behavior > Bet and Settle",
     "idempotency": "User Behavior > Bet and Settle",
     "rollback": "User Behavior > Cancel Bet",
@@ -143,21 +143,6 @@ CAPABILITY_CATEGORY_VARIANTS = {
                 },
             },
         },
-        {
-            "category": "bet_and_settle_no_round_end_control_parameter",
-            "template_variant": "no_round_end_control_parameter",
-            "description": (
-                "Use when a combined bet-and-settlement endpoint exists but has no explicit round-end control parameter."
-            ),
-            "applicability": {
-                "required_endpoint_roles": ["combined_bet_settlement"],
-                "required_parameter_semantics": ["combined_bet_settlement"],
-                "parameter_semantics": {
-                    "combined_bet_settlement": True,
-                    "round_end_control": False,
-                },
-            },
-        },
     ],
     "multiple_settlements": [
         {
@@ -194,6 +179,14 @@ CONDITIONAL_MANDATORY_CATEGORIES = {
         "output_section": "User Behavior > Launch Game",
         "condition": "endpoint_analysis.endpoint_topology.authenticate.mode == endpoint_present",
     },
+    "authentication_is_necessary": {
+        "category": "authentication_is_necessary",
+        "output_section": "User Behavior > Bet and Settle",
+        "condition": (
+            "endpoint_analysis.endpoint_topology.authenticate.mode == endpoint_present "
+            "and endpoint_analysis.endpoint_topology.authenticate.authentication_required == true"
+        ),
+    },
     "bet_and_settle": {
         "category": "bet_and_settle",
         "output_section": "User Behavior > Bet and Settle",
@@ -205,14 +198,6 @@ CONDITIONAL_MANDATORY_CATEGORIES = {
         "condition": (
             "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint "
             "and endpoint_analysis.parameter_semantics.round_end_control == true"
-        ),
-    },
-    "bet_and_settle_no_round_end_control_parameter": {
-        "category": "bet_and_settle_no_round_end_control_parameter",
-        "output_section": "User Behavior > Bet and Settle",
-        "condition": (
-            "endpoint_analysis.endpoint_topology.bet_and_settle.mode == combined_endpoint "
-            "and endpoint_analysis.parameter_semantics.round_end_control == false"
         ),
     },
 }

@@ -356,7 +356,7 @@ XMind 結構分為兩層：
 
 - **Mandatory**：不管 vendor capability 為何都要產生的必要測項（launch game、balance、bet、settlement、rollback、amount precision）
 - **Conditional Mandatory**：屬於必要測項，但必須先由 API doc 形態判斷是否可套用。例如 `BetAndSettle` 只有在偵測到 combined bet-and-settlement endpoint 時才選入，最後仍放在 `User Behavior > Bet and Settle`。
-- **Capability: xxx**：先依 `capability_profile.supports[xxx]` 決定是否選入，再依 `endpoint_analysis` 選擇正確分支（multiple_bets、multiple_settlements、rollback_settlements、cancel_bet、free_spin、jackpot、idempotency 等）。`jackpot` 只有在 settlement/result endpoint 真的有 jackpot 相關 request parameters 時才抽。
+- **Capability: xxx**：先依 `capability_profile.supports[xxx]` 決定是否選入，再依 `endpoint_analysis` 選擇正確分支（multiple_bets、multiple_settlements、rollback_settlements、cancel_bet、jackpot、idempotency 等）。`jackpot` 只有在 settlement/result endpoint 真的有 jackpot 相關 request parameters 時才抽；`free_spin` 則改看 bet 或 settlement/result endpoint 是否有 freespin 相關 request parameters。
 
 `endpoint_analyzer.py` 會把完整 endpoint / parameter table 壓縮成小型摘要，讓後續 generator 不必反覆讀完整 vendor doc，也避免抽錯 User Behavior template：
 
@@ -369,15 +369,19 @@ endpoint_roles + request_parameters
 
 目前已定義的分支：
 
+- `Authenticate`：conditional mandatory。只要 `endpoint_analysis.endpoint_topology.authenticate.mode = endpoint_present`，就抽 `Authenticate > Mandatory > test cases` 底下所有案例。
+  - `Authentication is necessary`：只有 API doc 確認 authenticate 是必要的，且沒 call 會回 unauthenticated / unauthorized / invalid token / missing session 類錯誤時才抽。目前案例 title 是 `Bet without authenticate`，先強制放到 `User Behavior > Bet and Settle`。
 - `BetAndSettle`：conditional mandatory。只有 `endpoint_analysis.endpoint_topology.bet_and_settle.mode = combined_endpoint` 時才抽。
   - `has_round_end_control_parameter`：combined endpoint 有 round-end control parameter。
-  - `no_round_end_control_parameter`：combined endpoint 沒有 explicit round-end control parameter。
+  - `no_round_end_control_parameter`：目前用不到，先不抽。
 - `multiple_bets`
   - `one_bet_endpoint`：同一個 bet endpoint，可能靠 action/method parameter 控制；User_Behavior_map 結構為 `Multiple Bets > one_bet_endpoint > test cases`。
   - `two_bet_endpoint`：兩個分開的 bet-like endpoints，例如 Bet / Rebet；User_Behavior_map 結構為 `Multiple Bets > two_bet_endpoint > test cases`。
 - `multiple_settlements`
   - `has_round_end_control_parameter`：settlement/result endpoint 有 round-end control parameter。
   - `no_round_end_control_parameter`：沒有 round-end control parameter，測項重點改看 transfer posting、balance change、idempotency / duplicate behavior。
+- `FreeSpin`：不同 vendor 可能把 freespin 欄位放在 bet 或 settlement/result endpoint；只要這些 endpoint 的 request parameters 有 freespin/free game/free bet/bonus/campaign 相關欄位，就抽 `freespin`。
+- `Special test cases`：預留給未來擴充，目前 selector 會跳過，不會抽取或生成。
 
 **實現路徑：**
 
