@@ -1,4 +1,5 @@
 # Virtual environment
+.agent/
 .venv/
 __pycache__/
 *.pyc
@@ -14,6 +15,7 @@ output/
 # Binary input files (too large for GitHub)
 input_xmind/*.xmind
 new_vendor_source/
+bac/
 *.xmind
 *.doc
 *.pdf

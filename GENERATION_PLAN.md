@@ -1,6 +1,6 @@
 # New Vendor Test Case Generation Plan
 
-This project prepares source knowledge for Codex and can now generate API parameter validation XMind test cases automatically.
+This project prepares source knowledge for Codex and can now generate API parameter validation and selected User Behavior XMind test cases automatically.
 
 Current implemented generation flow:
 
@@ -17,7 +17,7 @@ The public CLI keeps generation as one command:
 python main.py generate --vendor <Vendor>
 ```
 
-`generate` builds the draft JSON, generates deterministic API parameter validation cases, writes the XMind file, and re-reads the generated XMind for validation.
+`generate` builds the draft JSON, generates deterministic API parameter validation cases plus reference-driven User Behavior cases, writes the XMind file, and re-reads the generated XMind for validation.
 
 ## Step 1: Draft JSON For Codex
 
@@ -37,6 +37,7 @@ The draft JSON is a working context file for Codex. It contains:
 - endpoint roles
 - request and response parameter tables
 - request / success response / error response examples where available
+- JSON examples extracted from doc `<pre>` / code blocks, including request and response samples
 - endpoint-specific generation notes
 - fixed precondition and remarks rules
 - pending user questions
@@ -54,9 +55,9 @@ Preconditions should follow this pattern:
 4. Use the default test account generated from the vendor's first three English letters plus `YYMMDD`, such as `eso260628` for Esoterica on 2026-06-28, unless the user confirms another account.
 5. Paste the request parameters needed by that URL or endpoint, preferring request examples extracted from the vendor doc.
 
-Remarks should contain the response structure for the same URL or endpoint, preferring success/error response examples extracted from the vendor doc.
+Remarks should contain the request and response structure for the same URL or endpoint, preferring request/success/error response examples extracted from the vendor doc. Code-block examples from the vendor doc are preferred over generated samples.
 
-Launch-game fixed cases may have different preconditions and remarks from endpoint API cases.
+Launch-game fixed cases may have different preconditions and remarks from endpoint API cases. Dedicated launch-game User Behavior cases keep the launch request template, but generated `username` and `gameCode` values should be adapted from the current vendor context.
 
 ## Capability-Driven Expected Results
 
@@ -78,10 +79,53 @@ Error code selection rules:
 
 - Every generated expected result must include the expected vendor error code for failure cases.
 - If the vendor provides complete and specific error codes, Codex should use the documented code directly and should not infer a different code.
-- If the vendor provides only a small or incomplete error code list, Codex must infer the most likely error code from the available list instead of leaving the expected result blank.
-- Inferred error codes must be marked as inferred in the draft JSON, for example `error_code_source: "inferred_from_limited_vendor_codes"`.
+- If the vendor provides only a small or incomplete error code list, Codex must choose the most likely parameter error by documented meaning and exclusion instead of leaving the expected result blank.
+- Exclude clearly non-parameter errors first, such as insufficient balance/funds, client connection/network, invalid token/session-token, game not found, duplicate request, duplicate transaction, already refunded, or session lifecycle errors.
+- If exactly one plausible parameter/request error remains after exclusion, use it as the parameter validation error. Do not label the generated XMind case with `inferred_by_exclusion`; the exclusion decision is already resolved.
 - If several error codes could apply, choose the closest documented code and add a short `unresolved_questions` note for user/vendor confirmation.
-- For vendors like EGT Digital, where endpoint error code choices are limited, Codex should still pick the most suitable documented code for the negative scenario. For example, if a settlement after `roundCompleted=true` is rejected but the exact error is not documented, choose the closest non-OK status from that endpoint's documented status codes and mark it as inferred.
+- For vendors like IDNPlay, if documented errors include `301 Insufficient balance`, `302 client connection problem`, `303 Invalid Token`, `304 game is not found`, and `500 Internal Error`, parameter validation should use `500 Internal Error` after excluding the non-parameter errors.
+- If a vendor documents `Invalid Request`, that is normally a better parameter/request validation error than generic `Internal server error`.
+
+## API Parameter Generation Rules
+
+Implemented scope:
+
+- Generate one parameter validation case for each request parameter.
+- Required parameters generate negative validation steps.
+- Optional parameters (`Require=N` or equivalent) generate steps that expect a successful response, because omitting or varying optional data should not fail the API contract.
+- Every scalar parameter includes an input-space step.
+- Array parameters do not include input-space steps.
+- String parameters use integer values for wrong data type examples.
+- Integer, numeric, and Boolean parameters use string values for wrong data type examples.
+- Currency wrong-value examples use `"test"`, not `123`.
+- Timestamp/time-like parameters should use timestamp-specific invalid examples when the doc sample shows timestamp semantics.
+- If a parameter value is unclear, prefer the value from the doc request example, then combine it with the parameter table type.
+
+Array parameter steps:
+
+- `<array_param> doesn't set`
+- `<array_param> leave blank array`
+- `<array_param> input null`
+- `<array_param> input wrong data type`
+- `<array_param> input object instead of array`
+- `<array_param> input empty object item`
+- `<array_param> input item with missing required field`
+
+Array examples should stay readable. Use placeholders such as:
+
+```json
+"post_params": [ valid post_params parameters ]
+```
+
+For missing required field inside an array item, randomly choose one required item field from the parameter table and write:
+
+```json
+"post_params": [
+  { valid post_params parameters without nickname }
+]
+```
+
+Do not expand every nested array item parameter in the step text when it hurts readability.
 
 ## Endpoint Role Notes
 
@@ -537,7 +581,7 @@ xmind_detail/scenario_templates/
   tags/             ← tag-based JSON chunks
 ```
 
-**Generator-side selection logic (to implement in a new `template_loader.py` or extend `reference_selector.py`):**
+**Generator-side selection logic (partially implemented in `reference_selector.py` and `test_case_generator.py`):**
 
 1. Read `xmind_detail/scenario_templates/modules/*.json`
 2. Filter: all cases under `Mandatory` are always selected; cases under `Capability: xxx` are selected only when `capability_profile.supports[xxx] == true`
@@ -551,13 +595,12 @@ xmind_detail/scenario_templates/
 - Reuses the existing xmind_reader pipeline (no new parsing code)
 - Mandatory vs capability-specific is expressed naturally through XMind hierarchy
 - Adding a new category (e.g. `crash_game`) only requires adding XMind nodes
-- Requirement 2 (Reference Case Loader) is naturally solved because templates are already abstracted reference cases
+- Requirement 2 (Reference Case Loader) is partially covered by the current `User_Behavior_map` reference chunks; future scenario templates can make it more complete.
 
 #### Requirement 2: Reference Case Loader
 
-`reference_selector.py` currently does **filename matching only** (stem contains category term) and returns file paths. Missing:
+`reference_selector.py` selects categories and reference files, while `test_case_generator.py` now loads selected `User_Behavior_map` module chunks for reference-case adaptation. Remaining gaps:
 
-- **Read** the selected JSON chunk content (`modules/*.json`, `tags/*.json`)
 - **Abstract**: replace vendor-specific values (gameCode, endpoint, transactionId, amount) with placeholders
 - **Deduplicate**: same category may have multiple vendor reference cases; select the most representative canonical cases (filter out `duplicate_of` entries)
 
@@ -724,9 +767,9 @@ Requirement 4: Multi-Step Flow Builder (compose endpoint payloads into multi-ste
 Requirement 6: Validator extension (add User Behavior validation rules)
 ```
 
-Note: Requirement 2 (Reference Case Loader) is naturally resolved by Requirement 1 — the scenario templates XMind, once decomposed, already serves as the abstracted reference cases.
+Note: Requirement 2 (Reference Case Loader) is partially implemented with `xmind_detail/User_Behavior_map/modules`. A future `scenario_templates.xmind` can replace or extend that reference source once it is complete and decomposed.
 
-**Blocking dependency:** Full User Behavior generation still waits for the Scenario Templates XMind to be complete and decomposed into `xmind_detail/scenario_templates/`. Endpoint analysis and schema preparation can be implemented earlier because they define how templates will be filtered.
+**Current status:** Partial User Behavior generation is available now through reference-case adaptation. Full custom business-flow generation still waits for Scenario Templates XMind plus a flow builder that can compose exact multi-endpoint payloads.
 
 ## Supplementary PDF / URL Readers
 
@@ -940,7 +983,7 @@ Draft validation rules:
 - `steps` must not be empty.
 - Each step must have a paired expected result.
 - Failure/negative cases must include an expected error code.
-- Inferred error codes must include their inference source.
+- Error code source should be preserved in the draft for debugging, but the generated XMind should show the resolved expected error only.
 - `source_reference` should preserve which vendor doc and XMind cases were used.
 - Cases with unresolved questions should not be marked as final unless the uncertainty is intentionally accepted.
 
@@ -958,3 +1001,24 @@ Improve Mode:
 - Modify Python code only when parsing, mapping, validation, or export behavior is wrong.
 - Re-run readers to regenerate intermediate files.
 - Re-run `python main.py generate --vendor <Vendor>` and confirm the XMind validator report is valid.
+
+## Current User Behavior Generation Status
+
+User Behavior generation is now partially implemented and runs together with API parameter generation.
+
+Implemented:
+
+- Loads reference cases from `xmind_detail/User_Behavior_map/modules`.
+- Routes generated cases into QA-facing sections such as `User Behavior > Launch Game`, `User Behavior > Bet and Settle`, `User Behavior > Cancel Bet`, `User Behavior > Get Player balance`, and `User Behavior > Game type`.
+- Selects game-type cases from vendor doc game-code tables, including slot, live/casino, and arcade game types.
+- Uses endpoint role mapping to attach vendor endpoints and remarks to reference cases.
+- Uses the same endpoint precondition and remarks style as API Parameter cases for non-launch User Behavior cases.
+- Dedicated launch-game cases keep the launch request template while replacing vendor-specific `username` and `gameCode`.
+- Authenticate reference cases may route under Launch Game, but their remarks should still match endpoint API Parameter remarks rather than the dedicated launch-game template.
+- Cancel Bet / rollback cases should use the rollback/refund endpoint request and response examples from the doc when available.
+
+Still intentionally conservative:
+
+- User Behavior cases are adapted from reference cases rather than generated as full custom business-flow payload sequences.
+- Multi-endpoint payload composition is still future work.
+- Capability-specific edge cases may still need manual review when vendor docs are ambiguous.

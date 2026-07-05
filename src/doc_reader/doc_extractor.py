@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import json
 from collections import Counter
+from copy import deepcopy
 from typing import Any
 
 
@@ -40,8 +42,9 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
     sections = _sections(parsed.get("paragraphs", []))
     endpoints = _extract_endpoints(parsed, sections)
     error_codes = _extract_error_codes(parsed, text)
+    endpoint_examples = _endpoint_json_examples(sections)
     for endpoint in endpoints:
-        _attach_endpoint_examples(endpoint, error_codes)
+        _attach_endpoint_examples(endpoint, error_codes, endpoint_examples.get(endpoint.get("endpoint", ""), {}))
     checklist = _extract_vendor_master_checklist(parsed)
     game_codes = _extract_game_codes(parsed)
     profile = _capability_profile(vendor_name, text, endpoints, checklist)
@@ -127,8 +130,8 @@ def _endpoint_parameter_tables(
     cursor = 0
     by_endpoint: dict[str, dict[str, Any]] = {}
     for section in sections:
-        endpoint = _endpoint_from_section_title(section.get("title", ""))
-        if not endpoint:
+        endpoints = _endpoints_from_section_title(section.get("title", ""))
+        if not endpoints:
             continue
         entry: dict[str, Any] = {}
         if cursor < len(tables):
@@ -137,13 +140,18 @@ def _endpoint_parameter_tables(
         if cursor < len(tables):
             entry["response_parameters"] = _parameter_rows(tables[cursor])
             cursor += 1
-        by_endpoint[endpoint] = entry
+        for endpoint in endpoints:
+            by_endpoint[endpoint] = deepcopy(entry)
     return by_endpoint
 
 
 def _endpoint_from_section_title(title: str) -> str:
     match = ENDPOINT_RE.search(title or "")
     return match.group(1) if match else ""
+
+
+def _endpoints_from_section_title(title: str) -> list[str]:
+    return _unique_matches(ENDPOINT_RE.findall(title or ""))
 
 
 def _is_parameter_table(table: list[list[str]]) -> bool:
@@ -174,18 +182,130 @@ def _parameter_rows(table: list[list[str]]) -> list[dict[str, str]]:
     return rows
 
 
-def _attach_endpoint_examples(endpoint: dict[str, Any], error_codes: list[dict[str, str]]) -> None:
+def _attach_endpoint_examples(
+    endpoint: dict[str, Any],
+    error_codes: list[dict[str, str]],
+    source_examples: dict[str, Any] | None = None,
+) -> None:
     request_parameters = endpoint.get("request_parameters", [])
     response_parameters = endpoint.get("response_parameters", [])
+    source_examples = source_examples or {}
     if request_parameters:
-        endpoint["request_example"] = _example_object(request_parameters, include_optional=False)
+        endpoint["request_example"] = source_examples.get("request_example") or _example_object(
+            request_parameters,
+            include_optional=False,
+        )
     if response_parameters:
-        endpoint["success_response_example"] = _example_object(
+        endpoint["success_response_example"] = source_examples.get("success_response_example") or _example_object(
             response_parameters,
             include_optional=False,
             response_mode=True,
         )
         endpoint["error_response_example"] = _error_response_example(error_codes)
+
+
+def _endpoint_json_examples(sections: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    examples: dict[str, dict[str, Any]] = {}
+    for section in sections:
+        title = section.get("title", "")
+        content = [str(item) for item in section.get("content", [])]
+        section_endpoints = _unique_matches(ENDPOINT_RE.findall(title + "\n" + "\n".join(content)))
+        if not section_endpoints:
+            continue
+
+        current_endpoint = _endpoint_from_section_title(title) or section_endpoints[0]
+        last_label_endpoint = ""
+        for block in content:
+            parsed = _json_from_code_block(block)
+            if parsed is None:
+                endpoint_in_text = _endpoint_from_section_title(block)
+                if endpoint_in_text:
+                    current_endpoint = endpoint_in_text
+                continue
+
+            label = _code_block_label(block)
+            labeled_endpoint = _endpoint_for_label(label, section_endpoints)
+            if labeled_endpoint:
+                current_endpoint = labeled_endpoint
+                last_label_endpoint = labeled_endpoint
+
+            target_endpoint = last_label_endpoint or current_endpoint
+            if not target_endpoint:
+                continue
+            entry = examples.setdefault(target_endpoint, {})
+            if _looks_like_response_example(parsed):
+                entry.setdefault("success_response_example", parsed)
+            else:
+                entry.setdefault("request_example", parsed)
+                last_label_endpoint = target_endpoint
+        _copy_examples_to_shared_section_endpoints(examples, section_endpoints)
+    return examples
+
+
+def _copy_examples_to_shared_section_endpoints(
+    examples: dict[str, dict[str, Any]], section_endpoints: list[str]
+) -> None:
+    if len(section_endpoints) < 2:
+        return
+    source_endpoint = next(
+        (endpoint for endpoint in section_endpoints if examples.get(endpoint)),
+        "",
+    )
+    if not source_endpoint:
+        return
+    source_examples = examples.get(source_endpoint, {})
+    for endpoint in section_endpoints:
+        if endpoint == source_endpoint:
+            continue
+        entry = examples.setdefault(endpoint, {})
+        for key, value in source_examples.items():
+            entry.setdefault(key, deepcopy(value))
+
+
+def _unique_matches(values: list[str]) -> list[str]:
+    output = []
+    for value in values:
+        if value not in output:
+            output.append(value)
+    return output
+
+
+def _json_from_code_block(block: str) -> Any | None:
+    text = str(block or "").strip()
+    start = text.find("{")
+    if start < 0:
+        return None
+    candidate = text[start:].strip()
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+
+def _code_block_label(block: str) -> str:
+    text = str(block or "").strip()
+    start = text.find("{")
+    return text[:start].strip().lower() if start > 0 else ""
+
+
+def _endpoint_for_label(label: str, endpoints: list[str]) -> str:
+    normalized = re.sub(r"[^a-z0-9_/]+", " ", label.lower()).strip()
+    if not normalized:
+        return ""
+    for endpoint in endpoints:
+        endpoint_tail = endpoint.rstrip("/").rsplit("/", 1)[-1].lower()
+        if normalized == endpoint_tail or endpoint_tail in normalized.split():
+            return endpoint
+    return ""
+
+
+def _looks_like_response_example(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    response_keys = {"status", "data", "error", "result"}
+    request_keys = {"post_params", "retry", "game_result"}
+    keys = set(value)
+    return bool(keys & response_keys) and not bool(keys & request_keys)
 
 
 def _example_object(
@@ -325,37 +445,118 @@ def _select_error_code(error_codes: list[dict[str, str]]) -> dict[str, str]:
 
 def _extract_error_codes(parsed: dict[str, Any], text: str) -> list[dict[str, str]]:
     found: dict[str, str] = {}
+    sections = _sections(parsed.get("paragraphs", []))
     for table in parsed.get("tables", []):
         if not table:
             continue
-        headers = [cell.strip().lower() for cell in table[0]]
-        if "code" in headers and any(header in headers for header in ("message", "description")):
+        headers = [_normalize_error_header(cell) for cell in table[0]]
+        if "code" in headers and any(header in headers for header in ("message", "description", "context")):
             code_index = headers.index("code")
-            message_index = headers.index("message") if "message" in headers else headers.index("description")
+            message_index = _first_header_index(headers, ("message", "description", "context"))
+            if message_index is None:
+                continue
             exception_index = headers.index("related exceptions") if "related exceptions" in headers else None
             for row in table[1:]:
                 if len(row) <= max(code_index, message_index):
                     continue
                 code = row[code_index].strip()
-                if not re.fullmatch(r"\d{1,6}", code):
+                if not _is_error_code(code):
                     continue
                 context = row[message_index].strip()
                 if exception_index is not None and len(row) > exception_index and row[exception_index].strip():
                     context = f"{context} | {row[exception_index].strip()}"
                 found.setdefault(code, context)
 
+    for section in sections:
+        title = section.get("title", "")
+        content = section.get("content", [])
+        if not _is_error_code_section(title, content):
+            continue
+        for code, context in _error_codes_from_section_content(content).items():
+            found.setdefault(code, context)
+
     if found:
-        return [{"code": code, "context": context} for code, context in sorted(found.items(), key=lambda item: int(item[0]))]
+        return _sorted_error_codes(found)
 
     for match in ERROR_CODE_RE.finditer(text):
         code = match.group(1)
-        if not re.fullmatch(r"\d{1,6}", code):
+        if not _is_error_code(code):
             continue
         start = max(0, match.start() - 120)
         end = min(len(text), match.end() + 180)
         found.setdefault(code, text[start:end].replace("\n", " ").strip())
 
-    return [{"code": code, "context": context} for code, context in sorted(found.items(), key=lambda item: int(item[0]))]
+    return _sorted_error_codes(found)
+
+
+def _normalize_error_header(value: str) -> str:
+    normalized = _normalize_header(value)
+    aliases = {
+        "error code": "code",
+        "error codes": "code",
+        "status code": "code",
+        "response code": "code",
+        "message": "message",
+        "error message": "message",
+        "description": "description",
+        "desc": "description",
+        "context": "context",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _first_header_index(headers: list[str], candidates: tuple[str, ...]) -> int | None:
+    for candidate in candidates:
+        if candidate in headers:
+            return headers.index(candidate)
+    return None
+
+
+def _is_error_code_section(title: str, content: list[str]) -> bool:
+    title_text = _normalize_header(title)
+    if "error code" in title_text or title_text == "errors":
+        return True
+    preview = " ".join(content[:8]).lower()
+    return "error code" in preview and ("message" in preview or "description" in preview)
+
+
+def _error_codes_from_section_content(content: list[str]) -> dict[str, str]:
+    tokens = [str(item).strip() for item in content if str(item).strip()]
+    found: dict[str, str] = {}
+    start = _error_section_data_start(tokens)
+    index = start
+    while index < len(tokens):
+        code = tokens[index].strip()
+        if not _is_error_code(code):
+            index += 1
+            continue
+        context_parts = []
+        index += 1
+        while index < len(tokens) and not _is_error_code(tokens[index]):
+            token = tokens[index].strip()
+            if token and _normalize_error_header(token) not in {"code", "message", "description", "context"}:
+                context_parts.append(token)
+            index += 1
+        found.setdefault(code, " | ".join(context_parts).strip())
+    return found
+
+
+def _error_section_data_start(tokens: list[str]) -> int:
+    for index, token in enumerate(tokens):
+        if _is_error_code(token):
+            return index
+    return 0
+
+
+def _is_error_code(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{1,6}", str(value).strip()))
+
+
+def _sorted_error_codes(found: dict[str, str]) -> list[dict[str, str]]:
+    return [
+        {"code": code, "context": context}
+        for code, context in sorted(found.items(), key=lambda item: int(item[0]))
+    ]
 
 
 def _capability_profile(

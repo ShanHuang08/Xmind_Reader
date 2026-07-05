@@ -94,8 +94,10 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "rollback_betandsettle": "User Behavior > Cancel Bet",
     "freespin": "User Behavior > Bet and Settle",
     "jackpot": "User Behavior > Bet and Settle",
-    "slots": "User Behavior > Game type > Slots",
-    "arcade_game": "User Behavior > Game type > Arcade game",
+    "slots": "User Behavior > Game type > Slot game",
+    "slot_game": "User Behavior > Game type > Slot game",
+    "arcade_game": "User Behavior > Game type > Arcade",
+    "live_game": "User Behavior > Game type > Live game",
     "mini_game": "User Behavior > Game type > Mini game",
     "crash_game": "User Behavior > Game type > Crash game",
 }

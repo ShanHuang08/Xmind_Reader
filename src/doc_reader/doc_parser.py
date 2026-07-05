@@ -112,14 +112,18 @@ def _parse_html_document(path: Path, html_text: str) -> dict[str, Any]:
     title = _clean(" ".join(root.xpath("//title/text()"))) or path.stem
     headings = []
     paragraphs = []
-    for element in root.xpath("//h1|//h2|//h3|//h4|//h5|//h6|//p|//li"):
-        text = _clean(element.text_content())
+    code_blocks = []
+    for element in root.xpath("//h1|//h2|//h3|//h4|//h5|//h6|//p|//li|//pre"):
+        tag = element.tag.lower()
+        text = _clean_code_block(element.text_content()) if tag == "pre" else _clean(element.text_content())
         if not text:
             continue
-        tag = element.tag.lower()
         if tag.startswith("h"):
             headings.append({"level": int(tag[1]), "text": text})
             paragraphs.append({"style": tag, "text": text})
+        elif tag == "pre":
+            code_blocks.append(text)
+            paragraphs.append({"style": "pre", "text": text})
         else:
             paragraphs.append({"style": tag, "text": text})
 
@@ -161,6 +165,7 @@ def _parse_html_document(path: Path, html_text: str) -> dict[str, Any]:
         "title": title,
         "headings": headings,
         "paragraphs": paragraphs,
+        "code_blocks": code_blocks,
         "tables": tables,
         "tables_detailed": tables_detailed,
         "links": links,
@@ -177,6 +182,12 @@ def _title_from_paragraphs(paragraphs: list[dict[str, str]]) -> str:
 
 def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _clean_code_block(value: str) -> str:
+    text = (value or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in text.split("\n")]
+    return "\n".join(lines).strip()
 
 
 def _checkbox_state(cell: etree._Element) -> str | None:

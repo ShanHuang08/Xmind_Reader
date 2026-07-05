@@ -65,11 +65,7 @@ CONDITIONAL_MANDATORY_CATEGORY_RULES = {
 
 CAPABILITY_CATEGORY_RULES = {
     "multiple_bets": "multiple_bets",
-    "multiple_settlements": [
-        "multiple_settlements",
-        "multiple_settlements_has_round_end_control_parameter",
-        "multiple_settlements_no_round_end_control_parameter",
-    ],
+    "multiple_settlements": "multiple_settlements",
     "rollback_settlements": "rollback_settled_bet",
     "modify_settlements_adjustment": "modify_settlement_adjustment",
     "cancel_bet": "rollback_bet",
@@ -103,6 +99,11 @@ def selected_categories(
             categories.add("multiple_bets_one_bet_endpoint")
         elif bet_mode == "two_bet_endpoint":
             categories.add("multiple_bets_two_bet_endpoint")
+    if supports.get("multiple_settlements"):
+        if _nested_value(analysis, ("parameter_semantics", "round_end_control")):
+            categories.add("multiple_settlements_has_round_end_control_parameter")
+        else:
+            categories.add("multiple_settlements_no_round_end_control_parameter")
     if supports.get("jackpot") and _nested_value(
         analysis, ("parameter_semantics", "jackpot_control")
     ):

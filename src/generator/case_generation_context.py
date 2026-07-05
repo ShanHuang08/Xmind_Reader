@@ -30,6 +30,7 @@ def build_generation_context(draft: dict[str, Any]) -> dict[str, Any]:
         "endpoint_roles": draft.get("endpoint_roles", []),
         "endpoint_analysis": draft.get("endpoint_analysis", {}),
         "error_codes": draft.get("error_codes", []),
+        "game_codes": draft.get("game_codes", []),
         "generation_mapping": draft.get("generation_mapping", {}),
         "case_authoring_rules": draft.get("case_authoring_rules", {}),
         "default_test_account": _default_test_account(draft),
@@ -60,17 +61,42 @@ def _select_parameter_error(error_codes: list[dict[str, Any]]) -> dict[str, str]
                 "description": str(item.get("context") or item.get("message") or item.get("description") or ""),
             }
 
+    remaining = []
+    excluded_reasons = []
     for item in error_codes:
         code = str(item.get("code", "")).strip()
-        if code and code not in {"0", "ok", "OK", "success", "SUCCESS"}:
-            return {
-                "code": code,
-                "source": "inferred_from_limited_vendor_codes",
-                "description": str(item.get("context") or item.get("message") or item.get("description") or ""),
-            }
+        description = str(item.get("context") or item.get("message") or item.get("description") or "").strip()
+        if not code or code in {"0", "ok", "OK", "success", "SUCCESS"}:
+            continue
+        reason = _non_parameter_error_reason(code, description)
+        if reason:
+            excluded_reasons.append(f"{code} {description}: {reason}")
+            continue
+        remaining.append((code, description))
+
+    if len(remaining) == 1:
+        code, description = remaining[0]
+        return {
+            "code": code,
+            "source": "documented",
+            "description": description,
+        }
 
     return {
         "code": "UNKNOWN_PARAMETER_ERROR",
         "source": "inferred_from_limited_vendor_codes",
-        "description": "No documented parameter error code was found.",
+        "description": "No documented parameter validation error code was found.",
     }
+
+
+def _non_parameter_error_reason(code: str, description: str) -> str:
+    text = f"{code} {description}".lower()
+    if "insufficient balance" in text or "insufficient funds" in text:
+        return "balance/funds error"
+    if "client connection" in text or "connection" in text or "network" in text:
+        return "connection/network error"
+    if "invalid token" in text or "token" in text:
+        return "authentication token error"
+    if "game is not found" in text or "game not found" in text or "not found" in text:
+        return "game lookup error"
+    return ""

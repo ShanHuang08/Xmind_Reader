@@ -19,7 +19,7 @@
    解析 Vendor 額外提供的 PDF API 文件，產生 endpoint index 和 section chunks。
 
 5. **測試案例生成** (`new_vendor_detail/` → `output/`)
-   從 Vendor 中間格式建立 draft JSON、自動產生 parameter validation 測試案例、輸出 MeterSphere 相容的 XMind 檔，並回讀驗證。
+   從 Vendor 中間格式建立 draft JSON、自動產生 API parameter validation 與部分 User Behavior 測試案例、輸出 MeterSphere 相容的 XMind 檔，並回讀驗證。
 
 
 ## 安裝方式
@@ -41,6 +41,12 @@ python3 -m pip install -r requirements.txt
 ```
 
 主要依賴：`lxml`、`python-docx`、`beautifulsoup4`、`markdownify`、`pymupdf4llm`。
+
+### macOS 相容性
+
+核心流程（doc reader、draft builder、test case generator、XMind writer）使用 `pathlib`、`json`、`zipfile` 和 UTF-8 讀寫，沒有綁定 Windows 路徑或 shell 指令。macOS / Linux 請使用 `python3` 執行即可。
+
+URL reader 有 Windows PowerShell fallback，但只會在 Windows 上啟用；macOS 會走 `urllib` 與 Playwright browser fallback。PDF / URL 額外流程仍需對應套件與 runtime 可用。
 
 
 ## 執行方式
@@ -89,7 +95,16 @@ python main.py pdf --pdf Vendor_API_Spec.pdf --vendor Vendor
 python main.py generate --vendor Esoterica
 ```
 
-一次執行：建立 draft JSON → 產生 parameter validation 案例 → 輸出 XMind → 回讀驗證。
+一次執行：建立 draft JSON → 產生 API parameter validation 與 User Behavior 案例 → 輸出 XMind → 回讀驗證。
+
+輸出位置：
+
+```text
+output/<Vendor>/
+  draft_test_cases.json
+  <Vendor>_test_cases.xmind
+  <Vendor>_test_cases_validation_report.json
+```
 
 
 ## 核心設計概念
@@ -200,8 +215,8 @@ src/
 | 檔案 | 功能 |
 |---|---|
 | `doc_reader_main.py` | 流程主控制器。檢查 `source_meta.json` 判斷是否已處理，未變更則跳過。 |
-| `doc_reader/doc_parser.py` | 文件解析。`.doc` 走 MIME/HTML 解碼，`.docx` 走 python-docx，`.html` 走 lxml。輸出段落、表格（含 checkbox）、連結。 |
-| `doc_reader/doc_extractor.py` | Vendor API 知識抽取。提取 endpoints（regex）、error codes、vendor master checklist、capability profile（關鍵字規則 + checklist 優先）、request/response parameter tables 和 example。 |
+| `doc_reader/doc_parser.py` | 文件解析。`.doc` 走 MIME/HTML 解碼，`.docx` 走 python-docx，`.html` 走 lxml。輸出段落、表格（含 checkbox）、連結，並保留 `<pre>` / code block 內容。 |
+| `doc_reader/doc_extractor.py` | Vendor API 知識抽取。提取 endpoints（regex）、error codes、vendor master checklist、capability profile（關鍵字規則 + checklist 優先）、request/response parameter tables，以及 doc code block 中的 request / success response example。 |
 | `doc_reader/doc_exporter.py` | 匯出 7 個檔案：api_summary.md、endpoints.json、error_codes.json、capability_profile.json、vendor_master_checklist.json、source_meta.json、raw_doc.json。 |
 
 ### PDF Reader 流程 (`python main.py pdf`)
@@ -235,10 +250,10 @@ src/
 | `generator/draft_builder.py` | Draft JSON 鷹架。讀取 capability_profile / endpoints / error_codes / checklist，組合 draft 檔。包含 endpoint 角色推斷、前置條件模板、generation_mapping（category → XMind section 對應表）。 |
 | `generator/draft_schema.py` | Draft schema 常數。定義 `SCHEMA_VERSION`、XMind 欄位標籤、API parameter test 合約、allowed output sections、category → section mapping、required/optional 欄位、negative keywords。 |
 | `generator/draft_validator.py` | Draft JSON 驗證器。檢查 required fields、output_section 合法性、category → section routing、scenario 格式、preconditions/remarks 標籤、steps 完整性、expected_error、id 唯一性。 |
-| `generator/case_generation_context.py` | 生成上下文。從 draft 取出 generation context（capability_profile、endpoint_roles、endpoint_analysis、error_codes），選擇 parameter error code，產生預設測試帳號。 |
+| `generator/case_generation_context.py` | 生成上下文。從 draft 取出 generation context（capability_profile、endpoint_roles、endpoint_analysis、error_codes、game_codes），選擇 parameter error code，產生預設測試帳號。 |
 | `generator/endpoint_analyzer.py` | Endpoint topology / parameter semantics 分析器。從 endpoint role 和 request parameters 判斷 betAndSettle combined endpoint、multiple bets endpoint 形態、settlement 是否有 round-end control parameter / jackpot control parameter。 |
 | `generator/reference_selector.py` | 參考知識選擇。依 capability_profile + endpoint_analysis 選擇 mandatory、conditional mandatory、capability-specific categories，並找出對應的 xmind_detail chunk 檔案作為參考。 |
-| `generator/test_case_generator.py` | 測試案例生成器（第一版：parameter validation）。遍歷每個 endpoint 的 request parameters，自動產生「缺失 / 空值 / 錯誤值」等 negative case，含 request payload 和 expected error response。 |
+| `generator/test_case_generator.py` | 測試案例生成器。遍歷每個 endpoint 的 request parameters，產生 required/optional/array 參數測項；同時從 User_Behavior_map 參考案例產生 Launch Game、Bet and Settle、Cancel Bet、Balance、Game type 等 User Behavior 測項。 |
 | `xmind_writer/metersphere_profile_extractor.py` | MeterSphere profile 提取。從 golden XMind 參考檔抽出 case 欄位風格、topic 深度、writer guidance，供 writer 遵循。 |
 | `xmind_writer/metersphere_xmind_writer.py` | XMind 寫入器。將驗證過的 draft 寫為 XMind ZIP（content.json + metadata.json + manifest.json），依 output_section 建立層級結構。 |
 | `xmind_writer/xmind_validator.py` | XMind 回讀驗證。用 xmind_reader 讀回生成的 XMind，比對 case 數量、scenario、層級結構是否正確。 |
@@ -276,6 +291,7 @@ src/
 - Word 圖片、截圖、流程圖中的文字不會自動 OCR。
 - PDF Reader 不做 OCR；掃描版或圖片型 PDF 只輸出 validation report。
 - URL 靜態抓取不一定能處理 JavaScript render 的文件（Stoplight、Swagger UI、Redoc）。
+- User Behavior 目前是參考案例改寫，不是完整 business-flow payload composer。
 
 
 ## Vendor Doc Reader 目前限制與改進方向
@@ -284,7 +300,7 @@ src/
 
 - Confluence 匯出的 `.doc` 表格如果欄位跨列、換行或 section 標題包含多個 endpoint，request / response table 可能會配錯 endpoint。
 - 文件中的 request URL example 不一定會被保留下來。
-- response format 若只出現在文字段落或 code block 而非表格，目前不一定能完整抽取。
+- response format 若只出現在非 JSON 文字段落，仍不一定能完整抽取。
 - optional parameter 是否放進 request example 仍依規則推斷。
 - error response example 目前套用同一個 response shape，再把 code/message 替換。
 - `game code` 表格欄位空白時使用 fallback。
@@ -292,11 +308,10 @@ src/
 
 改進方向：
 
-- 增加 code block / URL example extractor，保留原始 request URL、JSON body、success/error response。
-- 將 request/response example 寫入 `endpoints.json` 並記錄 `example_source`。
+- 增強 code block / URL example extractor，保留原始 request URL、JSON body、success/error response 與 `example_source`。
 - 增加 endpoint section parser profile，處理同一 heading 包含多個 endpoint 的情況。
 - 建立 parameter value generator profile，依 type / description / enum / format 產生更接近 vendor 文件的值。
-- 建立 error code selector，依 parameter name / endpoint role 選擇更準確的 error code。
+- 強化 error code selector，依 parameter name / endpoint role 選擇更準確的 error code。
 - 在 validation report 中列出使用 heuristic 的欄位，方便人工 review。
 
 
@@ -340,13 +355,13 @@ URL Reader 改進方向：
 
 詳細規格請參考 [GENERATION_PLAN.md](GENERATION_PLAN.md)。
 
-### User Behavior 案例生成（下一階段重點）
+### User Behavior 案例生成
 
-目前 `test_case_generator.py` 只覆蓋 parameter validation（每個 endpoint 的每個 parameter 產生 negative cases）。User Behavior 需要覆蓋完整的業務流程測試。
+目前 `test_case_generator.py` 已能產生部分 User Behavior cases，來源是 `xmind_detail/User_Behavior_map/modules` 的參考案例，再依 Vendor endpoint、game code、request/response example 做改寫。
 
 **方案：Scenario Templates XMind**
 
-手動維護一份 `scenario_templates.xmind`，以 category 驅動、配合 `capability_profile.supports`，透過現有 xmind_reader 管線分解成 JSON chunks 後供 generator 使用。
+長期仍建議手動維護一份 `scenario_templates.xmind`，以 category 驅動、配合 `capability_profile.supports`，透過現有 xmind_reader 管線分解成 JSON chunks 後供 generator 使用。
 
 ```
 xmind_detail/scenario_templates/   ← 資料夾已建立，等待 XMind 完成
@@ -383,7 +398,15 @@ endpoint_roles + request_parameters
 - `FreeSpin`：不同 vendor 可能把 freespin 欄位放在 bet 或 settlement/result endpoint；只要這些 endpoint 的 request parameters 有 freespin/free game/free bet/bonus/campaign 相關欄位，就抽 `freespin`。
 - `Special test cases`：預留給未來擴充，目前 selector 會跳過，不會抽取或生成。
 
-**實現路徑：**
+目前已實作：
+
+- Mandatory / conditional mandatory 參考案例選取。
+- Launch Game、Bet and Settle、Cancel Bet、Get Player balance、Game type 等輸出 section。
+- Game type 依 doc 的 game-code table 抽出 slot、live/casino、arcade 類型。
+- 非專門 Launch Game 的 User Behavior remarks / preconditions 使用和 API Parameter test 相同的 endpoint doc example。
+- Dedicated Launch Game cases 保留 launch request template，但會替換 `username` 和 `gameCode`。
+
+**後續實現路徑：**
 
 1. 完成 Scenario Templates XMind 並用 xmind_reader 分解到 `xmind_detail/scenario_templates/`
 2. Endpoint Analyzer + Category → Endpoint 反向映射（先判斷 topology / parameter semantics，再找對應 endpoint）
@@ -391,7 +414,7 @@ endpoint_roles + request_parameters
 4. Multi-Step Flow Builder（組合多 endpoint payload 成多步驟流程）
 5. Draft Validator 擴展（加入 User Behavior scenario 格式驗證規則）
 
-**Blocking dependency：** Python code 變更需等 Scenario Templates XMind 完成後才動工。
+**注意：** 現階段 User Behavior 是 reference-case adaptation；完整多步驟 payload composition 仍需 Scenario Templates XMind 與 flow builder 補齊。
 
 ### 其他待做項目
 

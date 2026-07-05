@@ -18,11 +18,20 @@ FALLBACK_GAME_CODES = {
 
 ENDPOINT_ROLE_RULES = {
     "authenticate": "authentication",
+    "auth": "authentication",
+    "login": "authentication",
     "balance": "balance_check",
+    "getbalance": "balance_check",
     "betandresult": "combined_bet_settlement",
+    "betandsettle": "combined_bet_settlement",
     "bet": "bet",
+    "debit": "bet",
     "result": "settlement",
+    "settle": "settlement",
+    "settlement": "settlement",
+    "credit": "settlement",
     "refund": "cancel_bet",
+    "cancel": "cancel_bet",
     "rollback": "rollback",
     "endround": "balance_confirmation_only",
 }
@@ -57,8 +66,10 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "rollback_betandsettle": "User Behavior > Cancel Bet",
     "freespin": "User Behavior > Bet and Settle",
     "jackpot": "User Behavior > Bet and Settle",
-    "slots": "User Behavior > Game type > Slots",
-    "arcade_game": "User Behavior > Game type > Arcade game",
+    "slots": "User Behavior > Game type > Slot game",
+    "slot_game": "User Behavior > Game type > Slot game",
+    "arcade_game": "User Behavior > Game type > Arcade",
+    "live_game": "User Behavior > Game type > Live game",
     "mini_game": "User Behavior > Game type > Mini game",
     "crash_game": "User Behavior > Game type > Crash game",
 }
