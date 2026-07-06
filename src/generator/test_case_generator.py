@@ -22,6 +22,35 @@ from generator.reference_selector import selected_categories, select_reference_f
 GENERATED_BY = "deterministic-parameter-generator/v1"
 USER_BEHAVIOR_GENERATED_BY = "user-behavior-reference-generator/v1"
 
+CATEGORY_OUTPUT_PRIORITY = [
+    "launch_game",
+    "balance",
+    "bet",
+    "settlement",
+    "amount_precision",
+    "rollback",
+    "authenticate",
+    "authentication_is_necessary",
+    "bet_and_settle",
+    "bet_and_settle_has_round_end_control_parameter",
+    "multiple_bets",
+    "multiple_bets_one_bet_endpoint",
+    "multiple_bets_two_bet_endpoint",
+    "multiple_settlements",
+    "multiple_settlements_has_round_end_control_parameter",
+    "multiple_settlements_no_round_end_control_parameter",
+    "rollback_bet",
+    "rollback_settled_bet",
+    "modify_settlement_adjustment",
+    "idempotency",
+    "freespin",
+    "jackpot",
+    "slot_game",
+    "live_game",
+    "arcade_game",
+    "mini_game",
+]
+
 
 def generate_test_cases_for_draft(
     draft: dict[str, Any],
@@ -97,7 +126,12 @@ def _merge_categories(primary: list[str], extra: list[str]) -> list[str]:
     for category in primary + extra:
         if category not in merged:
             merged.append(category)
-    return sorted(merged)
+    return _sort_categories_for_output(merged)
+
+
+def _sort_categories_for_output(categories: list[str]) -> list[str]:
+    priority = {category: index for index, category in enumerate(CATEGORY_OUTPUT_PRIORITY)}
+    return sorted(categories, key=lambda category: (priority.get(category, len(priority)), category))
 
 
 def _game_type_categories(context: dict[str, Any]) -> list[str]:
@@ -447,7 +481,7 @@ def _launch_preconditions(context: dict[str, Any]) -> str:
         f"{PRECONDITIONS_LABEL}\n"
         f"1. launch game {game_code}\n"
         "2. url：/game/url\n"
-        f"3. test account：{context.get('default_test_account', '')}\n\n"
+        f"3. test account：{context.get('default_test_account', '')}"
     )
 
 
@@ -487,12 +521,150 @@ def _parameter_validation_cases(
         endpoint_name = endpoint.get("endpoint", "")
         if not endpoint_name:
             continue
-        for parameter in endpoint.get("request_parameters", []):
+        for parameter in _expanded_request_parameters(endpoint):
             parameter_name = parameter.get("name", "")
             if not parameter_name:
                 continue
             cases.append(_parameter_case(context, endpoint, parameter, reference_files))
     return cases
+
+
+def _expanded_request_parameters(endpoint: dict[str, Any]) -> list[dict[str, Any]]:
+    parameters = [
+        parameter
+        for parameter in endpoint.get("request_parameters", [])
+        if isinstance(parameter, dict) and str(parameter.get("name", "")).strip()
+    ]
+    enriched_parameters = [
+        _parameter_with_example_type(endpoint, parameter) for parameter in parameters
+    ]
+    child_parameters_by_parent = {
+        str(parameter.get("name", "")).strip(): _child_parameters_from_request_example(
+            endpoint, parameter
+        )
+        for parameter in enriched_parameters
+    }
+    nested_leaf_names = {
+        str(child.get("name", "")).split("/")[-1]
+        for children in child_parameters_by_parent.values()
+        for child in children
+        if "/" in str(child.get("name", ""))
+    }
+    expanded: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for parameter in enriched_parameters:
+        name = str(parameter.get("name", "")).strip()
+        if _is_nested_only_parameter(endpoint, name, nested_leaf_names):
+            continue
+        if name not in seen:
+            expanded.append(parameter)
+            seen.add(name)
+        for child in child_parameters_by_parent.get(name, []):
+            child_name = str(child.get("name", "")).strip()
+            if child_name and child_name not in seen:
+                expanded.append(child)
+                seen.add(child_name)
+
+    return expanded
+
+
+def _is_nested_only_parameter(
+    endpoint: dict[str, Any], name: str, nested_leaf_names: set[str]
+) -> bool:
+    if name not in nested_leaf_names:
+        return False
+    return not _example_has_root_parameter(endpoint.get("request_example"), name)
+
+
+def _example_has_root_parameter(data: Any, name: str) -> bool:
+    return isinstance(data, dict) and name in data
+
+
+def _parameter_with_example_type(
+    endpoint: dict[str, Any], parameter: dict[str, Any]
+) -> dict[str, Any]:
+    name = str(parameter.get("name", "")).strip()
+    if not name:
+        return parameter
+    if str(parameter.get("type", "")).strip():
+        return parameter
+    value = _find_example_value(endpoint.get("request_example"), name)
+    if not isinstance(value, (dict, list)):
+        return parameter
+    enriched = dict(parameter)
+    enriched["type"] = _type_name(value)
+    return enriched
+
+
+def _child_parameters_from_request_example(
+    endpoint: dict[str, Any], parameter: dict[str, Any]
+) -> list[dict[str, Any]]:
+    parent_name = str(parameter.get("name", "")).strip()
+    if not parent_name:
+        return []
+    value = _find_example_value(endpoint.get("request_example"), parent_name)
+    if not isinstance(value, (dict, list)):
+        return []
+    return [
+        _child_parameter(parent_name, child_path, child_value, parameter)
+        for child_path, child_value in _walk_child_values(value)
+    ]
+
+
+def _walk_child_values(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                return _walk_child_values(item, prefix)
+        return []
+    if not isinstance(value, dict):
+        return []
+
+    children: list[tuple[str, Any]] = []
+    for key, child_value in value.items():
+        child_path = f"{prefix}/{key}" if prefix else str(key)
+        if isinstance(child_value, dict):
+            children.extend(_walk_child_values(child_value, child_path))
+        elif isinstance(child_value, list):
+            nested = _walk_child_values(child_value, child_path)
+            children.extend(nested or [(child_path, child_value)])
+        else:
+            children.append((child_path, child_value))
+    return children
+
+
+def _child_parameter(
+    parent_name: str,
+    child_path: str,
+    child_value: Any,
+    parent_parameter: dict[str, Any],
+) -> dict[str, Any]:
+    child = {
+        "name": f"{parent_name}/{child_path}",
+        "type": _type_name(child_value),
+        "required": parent_parameter.get("required", ""),
+        "description": (
+            f"Child parameter inferred from request example under {parent_name}."
+        ),
+        "parent_parameter": parent_name,
+        "source": "request_example_child",
+    }
+    return child
+
+
+def _type_name(value: Any) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "decimal"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "string"
 
 
 def _parameter_case(
@@ -545,7 +717,7 @@ def _preconditions(
         f"{PRECONDITIONS_LABEL}\n"
         f"1. launch game {game_code}\n"
         f"2. url：{endpoint_name}\n"
-        f"3. 测试账号：{context.get('default_test_account', '')}\n\n"
+        f"3. 测试账号：{context.get('default_test_account', '')}"
     )
 
 
@@ -811,6 +983,9 @@ def _normal_request_value(endpoint: dict[str, Any], parameter: dict[str, Any]) -
 def _find_example_value(data: Any, name: str) -> Any:
     if not name:
         return None
+    path_value = _find_example_path_value(data, name)
+    if path_value is not None:
+        return path_value
     if isinstance(data, dict):
         if name in data:
             return data[name]
@@ -824,6 +999,29 @@ def _find_example_value(data: Any, name: str) -> Any:
             if found is not None:
                 return found
     return None
+
+
+def _find_example_path_value(data: Any, name: str) -> Any:
+    parts = [part for part in str(name).split("/") if part]
+    if len(parts) <= 1:
+        return None
+    current = data
+    for part in parts:
+        if isinstance(current, dict):
+            if part not in current:
+                return None
+            current = current[part]
+        elif isinstance(current, list):
+            dict_items = [item for item in current if isinstance(item, dict)]
+            if not dict_items:
+                return None
+            current = dict_items[0]
+            if part not in current:
+                return None
+            current = current[part]
+        else:
+            return None
+    return current
 
 
 def _expected_error_response(
@@ -970,7 +1168,8 @@ def _json_block(data: dict[str, Any], focus_parameter: str = "") -> str:
     if not focus_parameter:
         return text
     lines = []
-    needle = f'"{focus_parameter}":'
+    focus_name = str(focus_parameter).split("/")[-1]
+    needle = f'"{focus_name}":'
     for line in text.splitlines():
         if needle in line:
             line += "  // focus"

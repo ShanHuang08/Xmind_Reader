@@ -15,11 +15,13 @@ from typing import Any
 _ROLE_MAP: dict[str, str] = {
     # --- endpoint last-path-segment ---
     "authenticate":       "authentication",
+    "auth":               "authentication",
     "getaccount":         "authentication",
     "getbalance":         "balance",
     "balance":            "balance",
     "bet":                "bet",
     "debit":              "bet",
+    "revision":           "rollback",
     "wager":              "bet",
     "wagerbybatch":       "bet",
     "settle":             "settlement",
@@ -52,8 +54,10 @@ _ROLE_MAP: dict[str, str] = {
 # specific keywords (e.g. "debit") should come before generic ones.
 _ROLE_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("debit",       "bet"),
+    ("revision",    "rollback"),
     ("credit",      "settlement"),
     ("refund",      "rollback"),
+    ("auth",        "authentication"),
     ("bet",         "bet"),
     ("wager",       "bet"),
     ("settle",      "settlement"),
@@ -140,6 +144,18 @@ SEAMLESS_METHOD_HEADING_RE = re.compile(
     r"^#{1,6}\s+(?:\*{0,2})\s*"
     r"(?P<method_name>GetBalance|Bet|Win|Refund|Rollback|Settle)"
     r"\s*(?:\*{0,2})\s*$",
+    re.IGNORECASE,
+)
+
+KEYWORD_METHOD_HEADING_RE = re.compile(
+    r"^#{1,6}\s+(?:[⦁•]\s*)?(?:\*{0,2})\s*"
+    r"(?P<method_name>Auth|Debit|Revision|Credit(?:\s*&\s*Refund)?|Refund)"
+    r"\s*(?:\*{0,2})\s*$",
+    re.IGNORECASE,
+)
+
+CALLBACK_FIELD_RE = re.compile(
+    r"\|\s*Auth\s+(?P<name>Debit|Credit|Token)\s*\|",
     re.IGNORECASE,
 )
 
@@ -289,7 +305,52 @@ def _find_endpoint_candidates(markdown: str) -> list[dict[str, Any]]:
                     "confidence": 0.90,
                 }
             )
+
+        keyword_heading_match = KEYWORD_METHOD_HEADING_RE.match(line.strip())
+        if keyword_heading_match:
+            method_names = _keyword_method_names(keyword_heading_match.group("method_name"))
+            context = "\n".join(lines[index : min(len(lines), index + 24)])
+            for method_name in method_names:
+                candidates.append(
+                    {
+                        "api_name": method_name.title(),
+                        "method": _nearby_method(lines, index) or "POST",
+                        "endpoint": f"keyword:{method_name}",
+                        "context": context,
+                        "line_index": index,
+                        "confidence": 0.88,
+                    }
+                )
+
+        callback_match = CALLBACK_FIELD_RE.search(line)
+        if callback_match:
+            method_name = _callback_field_method(callback_match.group("name"))
+            context = "\n".join(lines[max(0, index - 4) : min(len(lines), index + 8)])
+            candidates.append(
+                {
+                    "api_name": method_name.title(),
+                    "method": "POST",
+                    "endpoint": f"keyword:{method_name}",
+                    "context": context,
+                    "line_index": index,
+                    "confidence": 0.78,
+                }
+            )
     return candidates
+
+
+def _keyword_method_names(raw_name: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", raw_name.strip().lower())
+    if normalized == "credit & refund":
+        return ["credit", "refund"]
+    return [normalized.replace(" ", "_")]
+
+
+def _callback_field_method(raw_name: str) -> str:
+    normalized = raw_name.strip().lower()
+    if normalized == "token":
+        return "auth"
+    return normalized
 
 
 def _find_seamless_base_url(lines: list[str], current_line: int) -> str:
@@ -418,6 +479,8 @@ def _resolve_role(endpoint: str, api_name: str = "", context: str = "") -> str:
     text = endpoint.lower()
     # 1. request:xxx pseudo-endpoints
     if text.startswith("request:"):
+        return _ROLE_MAP.get(text.split(":", 1)[1], "")
+    if text.startswith("keyword:"):
         return _ROLE_MAP.get(text.split(":", 1)[1], "")
     # 2. Last segment of URL path
     path = text.split("?", 1)[0].rstrip("/")
