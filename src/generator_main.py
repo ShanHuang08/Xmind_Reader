@@ -10,6 +10,7 @@ from pathlib import Path
 from generator.case_generation_context import load_draft
 from generator.draft_builder import build_draft
 from generator.test_case_generator import generate_test_cases_file
+from generator.test_case_summary import write_test_case_summary
 from xmind_writer.metersphere_xmind_writer import write_xmind_from_draft
 from xmind_writer.xmind_validator import validate_generated_xmind
 
@@ -55,10 +56,13 @@ def main(argv: list[str] | None = None) -> int:
 
     xmind_path = Path(args.output) / args.vendor / f"{args.vendor}_test_cases.xmind"
     report_path = xmind_path.with_name(f"{xmind_path.stem}_validation_report.json")
+    summary_path = xmind_path.with_name(f"{xmind_path.stem}_summary.md")
     write_xmind_from_draft(after, xmind_path)
     report = validate_generated_xmind(xmind_path, after, report_path)
+    write_test_case_summary(after, summary_path)
     LOGGER.info("[%s] XMind written to %s", args.vendor, xmind_path)
     LOGGER.info("[%s] Validation report written to %s", args.vendor, report_path)
+    LOGGER.info("[%s] Summary markdown written to %s", args.vendor, summary_path)
     if not report.get("valid"):
         LOGGER.error(
             "[%s] XMind validation failed: %s",

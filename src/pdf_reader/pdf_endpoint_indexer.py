@@ -19,6 +19,7 @@ _ROLE_MAP: dict[str, str] = {
     "getaccount":         "authentication",
     "getbalance":         "balance",
     "balance":            "balance",
+    "wallet":             "balance",
     "bet":                "bet",
     "debit":              "bet",
     "revision":           "rollback",
@@ -226,6 +227,8 @@ def _find_endpoint_candidates(markdown: str) -> list[dict[str, Any]]:
     headings_by_line = _headings_by_line(lines)
     candidates = []
     for index, line in enumerate(lines):
+        if line.strip().lower().startswith("source url:"):
+            continue
         matches = list(METHOD_ENDPOINT_RE.finditer(line))
         matches.extend(METHOD_FULL_URL_RE.finditer(line))
         matches.extend(LABELED_ENDPOINT_RE.finditer(line))

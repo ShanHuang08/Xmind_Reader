@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import re
 from pathlib import Path
@@ -132,14 +133,27 @@ def _load_local_html(html_path: Path, source_url: str):
 
     raw = html_path.read_bytes()
     text = raw.decode("utf-8", errors="replace")
+    content_type = "application/json; charset=UTF-8" if _looks_like_openapi_json(html_path, text) else "text/html; charset=UTF-8"
     return UrlFetchResult(
         url=source_url or str(html_path),
         final_url=source_url or str(html_path),
         status_code=200,
-        content_type="text/html; charset=UTF-8",
+        content_type=content_type,
         text=text,
         sha256=sha256(raw).hexdigest(),
         fetch_method="local_html",
+    )
+
+
+def _looks_like_openapi_json(path: Path, text: str) -> bool:
+    if path.suffix.lower() not in {".json", ".openapi"} and "{" not in text[:20]:
+        return False
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and (
+        "openapi" in payload or "swagger" in payload or "paths" in payload
     )
 
 

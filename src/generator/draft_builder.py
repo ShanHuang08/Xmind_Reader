@@ -106,7 +106,10 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
     game_codes_path = vendor_dir / "game_codes.json"
     game_codes = _read_json(game_codes_path) if game_codes_path.exists() else _extract_game_codes_from_raw(vendor_dir)
 
-    endpoint_roles = [_endpoint_role(endpoint) for endpoint in endpoints]
+    supplementary_endpoint_roles = _supplementary_endpoint_roles(vendor_dir)
+    endpoint_roles = [
+        _endpoint_role(endpoint, supplementary_endpoint_roles) for endpoint in endpoints
+    ]
     draft = {
         "schema_version": "draft-test-cases/v1",
         "status": "draft_context_only",
@@ -142,9 +145,12 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
     return output_path
 
 
-def _endpoint_role(endpoint: dict[str, Any]) -> dict[str, Any]:
+def _endpoint_role(
+    endpoint: dict[str, Any], supplementary_endpoint_roles: dict[str, dict[str, str]] | None = None
+) -> dict[str, Any]:
     path = endpoint.get("endpoint", "")
-    role = _infer_role(path)
+    supplementary = _matching_supplementary_endpoint(path, supplementary_endpoint_roles or {})
+    role = _canonical_role(supplementary.get("role", "")) or _infer_role(path)
     generation_note = ""
     if role == "balance_confirmation_only":
         generation_note = (
@@ -155,6 +161,7 @@ def _endpoint_role(endpoint: dict[str, Any]) -> dict[str, Any]:
     return {
         "endpoint": path,
         "role": role,
+        "method": supplementary.get("method") or endpoint.get("method", ""),
         "generation_note": generation_note,
         "section": endpoint.get("section", ""),
         "keywords": endpoint.get("keywords", []),
@@ -170,6 +177,64 @@ def _infer_role(endpoint_path: str) -> str:
     lowered = endpoint_path.lower().rstrip("/")
     last = lowered.rsplit("/", 1)[-1]
     return ENDPOINT_ROLE_RULES.get(last, "supporting_endpoint")
+
+
+def _supplementary_endpoint_roles(vendor_dir: Path) -> dict[str, dict[str, str]]:
+    output: dict[str, dict[str, str]] = {}
+    for folder_name in ("vendor_url", "vendor_pdf"):
+        index_path = vendor_dir / folder_name / "endpoint_index.json"
+        if not index_path.exists():
+            continue
+        for item in _read_json(index_path):
+            if not isinstance(item, dict):
+                continue
+            endpoint = str(item.get("endpoint", "")).strip()
+            if not endpoint:
+                continue
+            output[_endpoint_signature(endpoint)] = {
+                "endpoint": endpoint,
+                "method": str(item.get("method", "")),
+                "role": str(item.get("role", "")),
+            }
+    return output
+
+
+def _matching_supplementary_endpoint(
+    endpoint_path: str, supplementary_endpoint_roles: dict[str, dict[str, str]]
+) -> dict[str, str]:
+    signature = _endpoint_signature(endpoint_path)
+    for candidate_signature, item in supplementary_endpoint_roles.items():
+        if _endpoint_signatures_match(signature, candidate_signature):
+            return item
+    return {}
+
+
+def _endpoint_signature(endpoint_path: str) -> str:
+    path = endpoint_path.lower().split("?", 1)[0].rstrip("/")
+    parts = [part for part in path.split("/") if part]
+    normalized = ["{}" if part.startswith("{") and part.endswith("}") else part for part in parts]
+    return "/" + "/".join(normalized)
+
+
+def _endpoint_signatures_match(left: str, right: str) -> bool:
+    left_parts = [part for part in left.split("/") if part]
+    right_parts = [part for part in right.split("/") if part]
+    shorter_length = min(len(left_parts), len(right_parts))
+    if shorter_length == 0:
+        return False
+    left_tail = left_parts[-shorter_length:]
+    right_tail = right_parts[-shorter_length:]
+    return all(
+        left_part == right_part or left_part == "{}" or right_part == "{}"
+        for left_part, right_part in zip(left_tail, right_tail)
+    )
+
+
+def _canonical_role(role: str) -> str:
+    return {
+        "balance": "balance_check",
+        "rollback": "cancel_bet",
+    }.get(role, role)
 
 
 def _case_authoring_rules(

@@ -148,7 +148,21 @@ def _game_type_categories(context: dict[str, Any]) -> list[str]:
             categories.add("arcade_game")
         if "mini" in text or "crash" in text:
             categories.add("mini_game")
+    if _vendor_checklist_enabled(context, "Game Type"):
+        categories.add("mini_game")
     return sorted(categories)
+
+
+def _vendor_checklist_enabled(context: dict[str, Any], checklist_name: str) -> bool:
+    profile = context.get("capability_profile", {})
+    target = checklist_name.strip().lower()
+    for item in profile.get("vendor_master_checklist", []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip().lower()
+        if name == target and bool(item.get("enabled")):
+            return True
+    return False
 
 
 def _user_behavior_cases(
@@ -226,6 +240,8 @@ def _user_behavior_selectors(
     if category == "live_game":
         return [("live_game", "Game Type > Live game")]
     if category == "arcade_game":
+        return [("mini_game", "Game Type > Mini game")]
+    if category == "mini_game":
         return [("mini_game", "Game Type > Mini game")]
     return []
 
@@ -856,7 +872,7 @@ def _optional_parameter_steps(
         specs = _array_parameter_step_specs(endpoint, parameter)
     elif "amount" in lowered:
         specs = [
-            (f"{parameter_name} doesn't set", f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}'),
+            (f"{parameter_name} doesn't set", _optional_amount_missing_request_line(parameter)),
             (f"{parameter_name} Input blank", f'"{parameter_name}": ""'),
             (
                 f"{parameter_name} Input exceed 20 digit numbers",
@@ -879,6 +895,11 @@ def _optional_parameter_steps(
         ]
     success_response = _json_block(_success_response(endpoint))
     return [_success_step_case(title, request_line, success_response) for title, request_line in specs]
+
+
+def _optional_amount_missing_request_line(parameter: dict[str, Any]) -> str:
+    name = str(parameter.get("name", "amount")).split("/")[-1] or "amount"
+    return f'"{name}": 0'
 
 
 def _array_parameter_steps(
