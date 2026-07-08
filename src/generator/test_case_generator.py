@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -537,12 +538,33 @@ def _parameter_validation_cases(
         endpoint_name = endpoint.get("endpoint", "")
         if not endpoint_name:
             continue
+        for parameter in _path_parameters(endpoint):
+            cases.append(_parameter_case(context, endpoint, parameter, reference_files))
         for parameter in _expanded_request_parameters(endpoint):
             parameter_name = parameter.get("name", "")
             if not parameter_name:
                 continue
             cases.append(_parameter_case(context, endpoint, parameter, reference_files))
     return cases
+
+
+def _path_parameters(endpoint: dict[str, Any]) -> list[dict[str, Any]]:
+    endpoint_name = str(endpoint.get("endpoint", ""))
+    names = []
+    for match in re.finditer(r"\{([^{}]+)\}", endpoint_name):
+        name = match.group(1).strip()
+        if name and name not in names:
+            names.append(name)
+    return [
+        {
+            "name": name,
+            "type": "string",
+            "required": "Y",
+            "description": f"Path parameter in endpoint URL: {name}.",
+            "source": "path_parameter",
+        }
+        for name in names
+    ]
 
 
 def _expanded_request_parameters(endpoint: dict[str, Any]) -> list[dict[str, Any]]:
@@ -693,7 +715,7 @@ def _parameter_case(
     endpoint_display_name = _endpoint_display_name(endpoint_name)
     parameter_name = parameter.get("name", "")
     scenario = API_PARAMETER_CASE_TITLE_TEMPLATE.format(parameter=parameter_name)
-    expected_error = deepcopy(context.get("parameter_error", {}))
+    expected_error = _expected_error_for_parameter(context, parameter)
     if expected_error.get("source", "").startswith("inferred") and "inference_reason" not in expected_error:
         expected_error["inference_reason"] = (
             "No endpoint-specific parameter validation code was found; selected the closest documented vendor code."
@@ -724,6 +746,32 @@ def _parameter_case(
     }
 
 
+def _expected_error_for_parameter(
+    context: dict[str, Any], parameter: dict[str, Any]
+) -> dict[str, Any]:
+    if parameter.get("source") == "path_parameter":
+        return _path_parameter_error(context, str(parameter.get("name", "")))
+    return deepcopy(context.get("parameter_error", {}))
+
+
+def _path_parameter_error(context: dict[str, Any], parameter_name: str) -> dict[str, Any]:
+    for item in context.get("error_codes", []):
+        code = str(item.get("code", "")).strip()
+        description = str(
+            item.get("context") or item.get("message") or item.get("description") or ""
+        ).strip()
+        if code == "0" and "unauthorized" in description.lower():
+            return {
+                "code": code,
+                "source": "documented",
+                "description": description,
+                "applies_to": parameter_name,
+            }
+    fallback = deepcopy(context.get("parameter_error", {}))
+    fallback.setdefault("applies_to", parameter_name)
+    return fallback
+
+
 def _preconditions(
     context: dict[str, Any], endpoint: dict[str, Any]
 ) -> str:
@@ -738,7 +786,8 @@ def _preconditions(
 
 
 def _remarks(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
-    request = _request_payload(endpoint, parameter.get("name", ""))
+    focus_parameter = "" if parameter.get("source") == "path_parameter" else parameter.get("name", "")
+    request = _request_payload(endpoint, focus_parameter)
     response = _response_payload(endpoint)
     return (
         f"{REMARKS_LABEL}\n"
@@ -761,6 +810,9 @@ def _parameter_steps(
     code = expected_error.get("code", "UNKNOWN_PARAMETER_ERROR")
     error_response = _json_block(_expected_error_response(endpoint, expected_error))
     steps: list[dict[str, str]] = []
+
+    if parameter.get("source") == "path_parameter":
+        return _path_parameter_steps(endpoint, parameter, code, error_response)
 
     if _is_optional_parameter(parameter):
         return _optional_parameter_steps(endpoint, parameter)
@@ -860,6 +912,41 @@ def _parameter_steps(
             )
         )
     return steps
+
+
+def _path_parameter_steps(
+    endpoint: dict[str, Any],
+    parameter: dict[str, Any],
+    expected_code: str,
+    error_response: str,
+) -> list[dict[str, str]]:
+    name = str(parameter.get("name", "pathParameter"))
+    valid_value = _valid_path_parameter_value(endpoint, name)
+    invalid_value = _invalid_path_parameter_value(name, valid_value)
+    endpoint_name = str(endpoint.get("endpoint", ""))
+    valid_url = endpoint_name.replace(f"{{{name}}}", valid_value)
+    invalid_url = endpoint_name.replace(f"{{{name}}}", invalid_value)
+    return [
+        _step_case(
+            f"{name} input wrong value",
+            f"Correct url: {valid_url}\nTest url: {invalid_url}",
+            expected_code,
+            error_response,
+        )
+    ]
+
+
+def _valid_path_parameter_value(endpoint: dict[str, Any], name: str) -> str:
+    values = {
+        "platformid": "zenith-qa",
+    }
+    return values.get(name.lower(), f"<valid {name}>")
+
+
+def _invalid_path_parameter_value(name: str, valid_value: str) -> str:
+    if name.lower() == "platformid":
+        return "wrong-platform"
+    return f"invalid-{valid_value}".strip("-")
 
 
 def _optional_parameter_steps(
@@ -1172,16 +1259,9 @@ def _request_payload(endpoint: dict[str, Any], focus_parameter: str) -> str:
 
 def _response_payload(endpoint: dict[str, Any]) -> str:
     success = endpoint.get("success_response_example")
-    error = endpoint.get("error_response_example")
-    parts = []
     if isinstance(success, dict) and success:
-        parts.append(_json_block(success))
-    else:
-        parts.append(_sample_response(endpoint.get("response_parameters", [])))
-    if isinstance(error, dict) and error:
-        parts.append("// Error response")
-        parts.append(_json_block(error))
-    return "\n".join(parts)
+        return _json_block(success)
+    return _sample_response(endpoint.get("response_parameters", []))
 
 
 def _json_block(data: dict[str, Any], focus_parameter: str = "") -> str:

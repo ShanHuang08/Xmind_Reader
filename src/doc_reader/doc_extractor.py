@@ -303,9 +303,12 @@ def _looks_like_response_example(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     response_keys = {"status", "data", "error", "result"}
+    wallet_response_keys = {"balance", "currency", "denomination", "buffer"}
     request_keys = {"post_params", "retry", "game_result"}
     keys = set(value)
-    return bool(keys & response_keys) and not bool(keys & request_keys)
+    return (
+        bool(keys & response_keys) or wallet_response_keys.issubset(keys)
+    ) and not bool(keys & request_keys)
 
 
 def _example_object(
