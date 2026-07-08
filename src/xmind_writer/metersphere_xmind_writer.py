@@ -76,6 +76,9 @@ def _append_case_topic(parent: dict[str, Any], case: dict[str, Any], show_case_i
     scenario = str(case.get("scenario") or "未命名用例")
     title = scenario if scenario.startswith(CASE_TITLE_PREFIX) else f"{CASE_TITLE_PREFIX}{scenario}"
     case_topic = _topic(title)
+    markers = _case_markers(case)
+    if markers:
+        case_topic["markers"] = [{"markerId": marker_id} for marker_id in markers]
     case_topic["children"] = {"attached": _case_field_topics(case, show_case_id=show_case_id)}
     _children(parent).append(case_topic)
 
@@ -150,6 +153,18 @@ def _topic(title: str) -> dict[str, Any]:
         "class": "topic",
         "title": title,
     }
+
+
+def _case_markers(case: dict[str, Any]) -> list[str]:
+    markers = case.get("markers", [])
+    if not isinstance(markers, list):
+        return []
+    output = []
+    for marker in markers:
+        marker_id = str(marker).strip()
+        if marker_id and marker_id not in output:
+            output.append(marker_id)
+    return output
 
 
 def _metadata(draft: dict[str, Any]) -> dict[str, Any]:

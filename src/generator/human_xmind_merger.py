@@ -327,6 +327,7 @@ def _source_case_to_draft_case(source_case: dict[str, Any], human_xmind_path: Pa
         "steps": _source_steps(source_case.get("steps", [])),
         "remarks": _labeled_value(str(source_case.get("remarks", "")), REMARKS_LABEL),
         "tags": _source_tags(source_case.get("labels", [])),
+        "markers": _source_markers(source_case.get("markers", [])),
         "priority": str(source_case.get("priority") or "P2"),
         "source_reference": {
             "generated_by": HUMAN_OVERLAY_GENERATED_BY,
@@ -366,6 +367,17 @@ def _source_steps(value: Any) -> list[dict[str, str]]:
                 "expected": str(step.get("expected", "")),
             }
         )
+    return output
+
+
+def _source_markers(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output = []
+    for marker in value:
+        marker_id = str(marker).strip()
+        if marker_id and marker_id not in output:
+            output.append(marker_id)
     return output
 
 
@@ -437,6 +449,12 @@ def _overlay_human_case(
     elif _steps_changed(base_steps, human_steps):
         merged["steps"] = human_steps
         fields.append("steps")
+
+    human_markers = _source_markers(human_case.get("markers", []))
+    base_markers = _source_markers(base_case.get("markers", []))
+    if human_markers != base_markers:
+        merged["markers"] = human_markers
+        fields.append("markers")
 
     if fields:
         existing_overrides = merged.get("human_overrides")
