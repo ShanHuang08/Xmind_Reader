@@ -225,14 +225,23 @@ def _case_from_topic(sheet: dict[str, Any], topic: dict[str, Any]) -> dict[str, 
         module_path_parts = module_path_parts[1:]
 
     labels = list(topic.get("labels", []))
+    notes = _public_notes(topic.get("notes", []))
     if details.get("标签"):
         labels.append(details["标签"])
+
+    visible_case_id = (
+        details.get("merge_key", "")
+        or details.get("case_key", "")
+        or details.get("case_id", "")
+        or details.get("ID", "")
+    )
+    stable_case_id = visible_case_id or _stable_case_id_from_topic(topic)
 
     return _drop_empty(
         {
             "source_file": "",
             "sheet": sheet.get("title"),
-            "case_id": details.get("ID", ""),
+            "case_id": visible_case_id,
             "name": case_name,
             "preconditions": details.get("前置条件", ""),
             "module_path": " > ".join(module_path_parts),
@@ -241,8 +250,9 @@ def _case_from_topic(sheet: dict[str, Any], topic: dict[str, Any]) -> dict[str, 
             "labels": labels,
             "remarks": details.get("备注", ""),
             "priority": details.get("用例等级", ""),
+            "stable_case_id": stable_case_id,
             "markers": topic.get("markers", []),
-            "notes": topic.get("notes", []),
+            "notes": notes,
             "hyperlinks": topic.get("hyperlinks", []),
             "raw_topic_id": topic.get("id"),
             "raw_path": topic.get("path", []),
@@ -316,11 +326,16 @@ def _extract_notes(topic: dict[str, Any]) -> list[str]:
     if isinstance(notes, str):
         return [_clean_text(notes)]
     if isinstance(notes, dict):
-        return [
-            _clean_text(notes[key])
-            for key in ("plain", "html", "content")
-            if isinstance(notes.get(key), str) and notes[key].strip()
-        ]
+        output = []
+        for key in ("plain", "html", "content"):
+            value = notes.get(key)
+            if isinstance(value, str) and value.strip():
+                output.append(_clean_text(value))
+            elif isinstance(value, dict):
+                content = value.get("content")
+                if isinstance(content, str) and content.strip():
+                    output.append(_clean_text(content))
+        return output
     if isinstance(notes, list):
         return [_clean_text(str(item)) for item in notes if str(item).strip()]
     return []
@@ -370,6 +385,8 @@ def _fields_present(sheets: list[dict[str, Any]], cases: list[dict[str, Any]]) -
         )
     if any(case.get("case_id") for case in cases):
         fields.add("case_id")
+    if any(case.get("stable_case_id") for case in cases):
+        fields.add("stable_case_id")
     return fields
 
 
@@ -386,6 +403,16 @@ def _clean_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _stable_case_id_from_topic(topic: dict[str, Any]) -> str:
+    return ""
+
+
+def _public_notes(notes: Any) -> list[str]:
+    if not isinstance(notes, list):
+        return []
+    return [str(note) for note in notes if str(note).strip()]
 
 
 def _drop_empty(data: dict[str, Any]) -> dict[str, Any]:

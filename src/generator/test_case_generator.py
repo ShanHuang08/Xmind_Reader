@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -312,27 +313,6 @@ def _behavior_preconditions(context: dict[str, Any], category: str) -> str:
         return _preconditions(context, endpoint)
     return _launch_preconditions(context)
 
-    existing = reference_case.get("preconditions")
-    if existing:
-        return _ensure_preconditions_label(_adapt_behavior_text(context, str(existing)))
-    game_code = context.get("case_authoring_rules", {}).get("default_game_code") or "<confirm gameCode>"
-    account = context.get("default_test_account", "")
-    return (
-        "前置条件：\n"
-        f"1. launch game {game_code}\n"
-        f"2. test account: {account}\n"
-    )
-
-
-def _ensure_preconditions_label(value: str) -> str:
-    stripped = value.strip()
-    if stripped.startswith("前置条件："):
-        return stripped
-    if stripped.startswith(PRECONDITIONS_LABEL):
-        body = stripped[len(PRECONDITIONS_LABEL) :].lstrip()
-        return f"前置条件：\n{body}" if body else "前置条件："
-    return f"前置条件：\n{stripped}" if stripped else "前置条件："
-
 
 def _behavior_steps(context: dict[str, Any], reference_case: dict[str, Any]) -> list[dict[str, str]]:
     steps = reference_case.get("steps", [])
@@ -366,49 +346,7 @@ def _behavior_remarks(context: dict[str, Any], category: str) -> str:
     endpoint = _endpoint_for_behavior_category(context, category)
     if endpoint:
         return _remarks(endpoint, {"name": ""})
-    return _launch_remarks(context)
-
-    existing = reference_case.get("remarks")
-    if existing:
-        return _adapt_behavior_text(context, str(existing))
-    endpoints = _role_endpoint_map(context)
-    lines = [
-        f"{REMARKS_LABEL}",
-        f"Auth endpoint: {endpoints.get('authentication', '')}",
-        f"Bet endpoint: {endpoints.get('bet', '')}",
-        f"Settlement endpoint: {endpoints.get('settlement', '')}",
-        f"Cancel endpoint: {endpoints.get('cancel_bet', '')}",
-    ]
-    return "\n".join(line for line in lines if not line.endswith(": "))
-
-
-def _requires_expected_error(case: dict[str, Any]) -> bool:
-    searchable = " ".join(
-        [
-            str(case.get("scenario", "")),
-            " ".join(str(tag) for tag in case.get("tags", [])),
-            " ".join(str(step.get("step", "")) for step in case.get("steps", []) if isinstance(step, dict)),
-            " ".join(str(step.get("expected", "")) for step in case.get("steps", []) if isinstance(step, dict)),
-        ]
-    ).lower()
-    return any(
-        keyword in searchable
-        for keyword in (
-            "negative",
-            "fail",
-            "failed",
-            "failure",
-            "error",
-            "reject",
-            "rejected",
-            "invalid",
-            "missing",
-            "duplicate",
-            "timeout",
-            "not found",
-            "exceed",
-        )
-    )
+    return _generic_behavior_remarks(category)
 
 
 def _behavior_expected_error(context: dict[str, Any]) -> dict[str, Any]:
@@ -511,7 +449,7 @@ def _launch_remarks(context: dict[str, Any]) -> str:
         "platform": "WEB",
         "currency": _default_currency(context),
         "lobbyUrl": "https://www.google.com/",
-        "ipAddress": "192.168.1.1",
+        "ipAddress": "192.228.180.86",
     }
     return (
         f"{REMARKS_LABEL}\n"
@@ -519,6 +457,14 @@ def _launch_remarks(context: dict[str, Any]) -> str:
         "<code>\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
         "</code>"
+    )
+
+
+def _generic_behavior_remarks(category: str) -> str:
+    return (
+        f"{REMARKS_LABEL}\n"
+        f"API request parameters for `{category}` need to be filled from the target vendor endpoint. "
+        "Do not reuse the launch-game `/game/url` payload for this case."
     )
 
 
@@ -1140,6 +1086,7 @@ def _expected_error_response(
     message = expected_error.get("description") or "Parameter validation error"
     if isinstance(error, dict) and error:
         patched = deepcopy(error)
+        patched["timestamp"] = _current_unix_timestamp()
         patched.setdefault("error", {})
         if isinstance(patched["error"], dict):
             patched["error"]["code"] = code
@@ -1147,12 +1094,16 @@ def _expected_error_response(
         return patched
     return {
         "result": "ERROR",
-        "timestamp": "20110322T152403Z",
+        "timestamp": _current_unix_timestamp(),
         "error": {
             "code": code,
             "message": message,
         },
     }
+
+
+def _current_unix_timestamp() -> int:
+    return int(time.time())
 
 
 def _success_response(endpoint: dict[str, Any]) -> dict[str, Any]:

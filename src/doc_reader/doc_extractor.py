@@ -680,11 +680,6 @@ def _enabled_value(value: str) -> bool | str | None:
     return value.strip() if value.strip() else None
 
 
-def _capability_key(name: str) -> str:
-    key = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-    return key or "unknown"
-
-
 def _methods_near_endpoint(text: str, endpoint: str) -> list[str]:
     methods = []
     pattern = re.compile(rf"(?i)\b(GET|POST|PUT|PATCH|DELETE)\b\s*{re.escape(endpoint)}")

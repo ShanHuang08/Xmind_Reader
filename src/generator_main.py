@@ -7,8 +7,13 @@ import json
 import logging
 from pathlib import Path
 
-from generator.case_generation_context import load_draft
+from generator.case_generation_context import load_draft, save_draft
 from generator.draft_builder import build_draft
+from generator.human_xmind_merger import (
+    ensure_stable_case_ids,
+    merge_human_xmind_edits,
+    write_human_merge_manifest,
+)
 from generator.test_case_generator import generate_test_cases_file
 from generator.test_case_summary import write_test_case_summary
 from xmind_writer.metersphere_xmind_writer import write_xmind_from_draft
@@ -35,6 +40,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Reference XMind detail root. Default: xmind_detail",
     )
     parser.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
+    parser.add_argument(
+        "--human-xmind",
+        default="",
+        help="Optional human-edited XMind copy to merge before writing the final XMind.",
+    )
+    parser.add_argument(
+        "--show-case-id",
+        action="store_true",
+        help="Deprecated compatibility option. Visible ID topics are always written.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -51,18 +66,31 @@ def main(argv: list[str] | None = None) -> int:
         replace_generated=True,
     )
     after = load_draft(draft_path)
+    ensure_stable_case_ids(after)
+    manifest_path = Path(args.output) / args.vendor / f"{args.vendor}_human_merge_manifest.json"
+    merge_report_path = Path(args.output) / args.vendor / f"{args.vendor}_human_merge_report.md"
+    if args.human_xmind:
+        after = merge_human_xmind_edits(
+            after,
+            Path(args.human_xmind),
+            merge_report_path,
+            manifest_path,
+        )
+    save_draft(after, draft_path)
     after_count = len(after.get("test_cases", [])) if isinstance(after.get("test_cases"), list) else 0
     LOGGER.info("[%s] Generated draft cases: %s", args.vendor, after_count)
 
     xmind_path = Path(args.output) / args.vendor / f"{args.vendor}_test_cases.xmind"
     report_path = xmind_path.with_name(f"{xmind_path.stem}_validation_report.json")
     summary_path = xmind_path.with_name(f"{xmind_path.stem}_summary.md")
-    write_xmind_from_draft(after, xmind_path)
+    write_xmind_from_draft(after, xmind_path, show_case_id=args.show_case_id)
     report = validate_generated_xmind(xmind_path, after, report_path)
     write_test_case_summary(after, summary_path)
+    write_human_merge_manifest(after, manifest_path)
     LOGGER.info("[%s] XMind written to %s", args.vendor, xmind_path)
     LOGGER.info("[%s] Validation report written to %s", args.vendor, report_path)
     LOGGER.info("[%s] Summary markdown written to %s", args.vendor, summary_path)
+    LOGGER.info("[%s] Human merge manifest written to %s", args.vendor, manifest_path)
     if not report.get("valid"):
         LOGGER.error(
             "[%s] XMind validation failed: %s",

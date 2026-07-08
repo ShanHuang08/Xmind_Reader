@@ -175,7 +175,16 @@ def _endpoint_role(
 
 def _infer_role(endpoint_path: str) -> str:
     lowered = endpoint_path.lower().rstrip("/")
-    last = lowered.rsplit("/", 1)[-1]
+    parts = [part for part in lowered.split("/") if part and not (part.startswith("{") and part.endswith("}"))]
+    if len(parts) >= 2 and parts[-2:] == ["bet", "place"]:
+        return "bet"
+    if len(parts) >= 2 and parts[-2:] == ["bet", "win"]:
+        return "settlement"
+    if len(parts) >= 2 and parts[-2:] == ["bet", "refund"]:
+        return "cancel_bet"
+    if parts and parts[-1] == "wallet":
+        return "balance_check"
+    last = parts[-1] if parts else lowered.rsplit("/", 1)[-1]
     return ENDPOINT_ROLE_RULES.get(last, "supporting_endpoint")
 
 

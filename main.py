@@ -98,7 +98,15 @@ Output folders:
     return generator_main(
         _forward_args(
             parsed,
-            names=("vendor", "vendor_detail", "output", "xmind_detail", "log_level"),
+            names=(
+                "vendor",
+                "vendor_detail",
+                "output",
+                "xmind_detail",
+                "human_xmind",
+                "show_case_id",
+                "log_level",
+            ),
         )
     )
 
@@ -257,6 +265,7 @@ def _add_generate_parser(subparsers: argparse._SubParsersAction) -> None:
 Examples:
   python main.py generate --vendor Esoterica
   python main.py generate --vendor Esoterica --vendor-detail new_vendor_detail --output output
+  python main.py generate --vendor Esoterica --human-xmind our_copy/Esoterica_test_cases.xmind
 """,
     )
     generate.add_argument("--vendor", required=True, help="Vendor folder name.")
@@ -272,6 +281,16 @@ Examples:
         help="Reference XMind detail root. Default: xmind_detail",
     )
     generate.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
+    generate.add_argument(
+        "--human-xmind",
+        default="",
+        help="Optional human-edited XMind copy to merge before writing the final XMind.",
+    )
+    generate.add_argument(
+        "--show-case-id",
+        action="store_true",
+        help="Debug option: write visible ID topics for stable_case_id values.",
+    )
 
 
 def _forward_args(

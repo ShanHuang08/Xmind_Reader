@@ -16,7 +16,9 @@ from generator.draft_schema import (
 from generator.draft_validator import validate_draft
 
 
-def write_xmind_from_draft(draft: dict[str, Any], output_path: Path | str) -> Path:
+def write_xmind_from_draft(
+    draft: dict[str, Any], output_path: Path | str, show_case_id: bool = False
+) -> Path:
     """Validate a draft object and write it as an XMind archive."""
     result = validate_draft(draft)
     if not result.valid:
@@ -25,7 +27,7 @@ def write_xmind_from_draft(draft: dict[str, Any], output_path: Path | str) -> Pa
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    content = [_build_sheet(draft)]
+    content = [_build_sheet(draft, show_case_id=show_case_id)]
     metadata = _metadata(draft)
     manifest = _manifest()
 
@@ -36,7 +38,7 @@ def write_xmind_from_draft(draft: dict[str, Any], output_path: Path | str) -> Pa
     return output
 
 
-def _build_sheet(draft: dict[str, Any]) -> dict[str, Any]:
+def _build_sheet(draft: dict[str, Any], show_case_id: bool = False) -> dict[str, Any]:
     vendor = draft.get("vendor") or "GeneratedVendor"
     root = _topic("功能用例")
     regression = _ensure_child(root, "Regression")
@@ -46,7 +48,7 @@ def _build_sheet(draft: dict[str, Any]) -> dict[str, Any]:
     for case in draft.get("test_cases", []):
         if not isinstance(case, dict):
             continue
-        _place_case(vendor_topic, case)
+        _place_case(vendor_topic, case, show_case_id=show_case_id)
 
     return {
         "id": _id(),
@@ -56,29 +58,29 @@ def _build_sheet(draft: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _place_case(vendor_topic: dict[str, Any], case: dict[str, Any]) -> None:
+def _place_case(vendor_topic: dict[str, Any], case: dict[str, Any], show_case_id: bool = False) -> None:
     output_section = case.get("output_section", "")
     if output_section == API_PARAMETER_TEST_SECTION:
         section = _ensure_child(vendor_topic, API_PARAMETER_TEST_SECTION)
         endpoint = _ensure_child(section, _endpoint_display_name(case))
-        _append_case_topic(endpoint, case)
+        _append_case_topic(endpoint, case, show_case_id=show_case_id)
         return
 
     parent = vendor_topic
     for part in [part.strip() for part in output_section.split(">") if part.strip()]:
         parent = _ensure_child(parent, part)
-    _append_case_topic(parent, case)
+    _append_case_topic(parent, case, show_case_id=show_case_id)
 
 
-def _append_case_topic(parent: dict[str, Any], case: dict[str, Any]) -> None:
+def _append_case_topic(parent: dict[str, Any], case: dict[str, Any], show_case_id: bool = False) -> None:
     scenario = str(case.get("scenario") or "未命名用例")
     title = scenario if scenario.startswith(CASE_TITLE_PREFIX) else f"{CASE_TITLE_PREFIX}{scenario}"
     case_topic = _topic(title)
-    case_topic["children"] = {"attached": _case_field_topics(case)}
+    case_topic["children"] = {"attached": _case_field_topics(case, show_case_id=show_case_id)}
     _children(parent).append(case_topic)
 
 
-def _case_field_topics(case: dict[str, Any]) -> list[dict[str, Any]]:
+def _case_field_topics(case: dict[str, Any], show_case_id: bool = False) -> list[dict[str, Any]]:
     labels = XMIND_CASE_FIELD_LABELS
     topics = [
         _topic(str(case.get("preconditions", f"{labels['preconditions']}"))),
@@ -88,8 +90,9 @@ def _case_field_topics(case: dict[str, Any]) -> list[dict[str, Any]]:
         _topic(f"{labels['priority']}{case.get('priority', 'P2')}"),
         _steps_topic(case),
     ]
-    if case.get("id"):
-        topics.insert(0, _topic(f"ID：{case.get('id')}"))
+    stable_case_id = str(case.get("stable_case_id") or case.get("id") or "").strip()
+    if stable_case_id:
+        topics.insert(0, _topic(f"merge_key:{stable_case_id}"))
     return topics
 
 

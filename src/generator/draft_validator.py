@@ -245,12 +245,21 @@ def _validate_api_parameter_case(
 
     expected_scenario = API_PARAMETER_CASE_TITLE_TEMPLATE.format(parameter=parameter)
     if scenario and scenario != expected_scenario:
-        errors.append(
-            _error(
-                f"{path}.scenario",
-                f"API parameter case scenario must be {expected_scenario!r}.",
+        human_overrides = test_case.get("human_overrides", [])
+        if isinstance(human_overrides, list) and "scenario" in human_overrides:
+            warnings.append(
+                _warning(
+                    f"{path}.scenario",
+                    f"Human-edited API parameter case scenario differs from {expected_scenario!r}.",
+                )
             )
-        )
+        else:
+            errors.append(
+                _error(
+                    f"{path}.scenario",
+                    f"API parameter case scenario must be {expected_scenario!r}.",
+                )
+            )
 
     expected_module = str(test_case.get("endpoint_name") or endpoint.rsplit("/", 1)[-1]).strip()
     if test_case.get("module") and expected_module and test_case.get("module") != expected_module:
