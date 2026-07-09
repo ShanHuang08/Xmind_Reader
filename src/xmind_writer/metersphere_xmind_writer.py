@@ -38,6 +38,49 @@ def write_xmind_from_draft(
     return output
 
 
+def write_no_merge_key_copy(xmind_path: Path | str, output_path: Path | str | None = None) -> Path:
+    """Write a delivery copy with visible merge_key topics removed."""
+    source = Path(xmind_path)
+    target = Path(output_path) if output_path else source.with_name(f"{source.stem}_no_merge_key{source.suffix}")
+
+    with zipfile.ZipFile(source, "r") as input_archive:
+        entries = []
+        for info in input_archive.infolist():
+            data = input_archive.read(info.filename)
+            if info.filename == "content.json":
+                content = json.loads(data.decode("utf-8"))
+                for sheet in content if isinstance(content, list) else [content]:
+                    root = sheet.get("rootTopic") if isinstance(sheet, dict) else None
+                    if isinstance(root, dict):
+                        _remove_merge_key_topics(root)
+                data = json.dumps(content, ensure_ascii=False, indent=2).encode("utf-8")
+            entries.append((info, data))
+
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as output_archive:
+        for info, data in entries:
+            output_archive.writestr(info, data)
+    return target
+
+
+def _remove_merge_key_topics(topic: dict[str, Any]) -> None:
+    children = topic.get("children")
+    if not isinstance(children, dict):
+        return
+    attached = children.get("attached")
+    if not isinstance(attached, list):
+        return
+    kept = []
+    for child in attached:
+        if not isinstance(child, dict):
+            kept.append(child)
+            continue
+        if str(child.get("title", "")).startswith("merge_key:"):
+            continue
+        _remove_merge_key_topics(child)
+        kept.append(child)
+    children["attached"] = kept
+
+
 def _build_sheet(draft: dict[str, Any], show_case_id: bool = False) -> dict[str, Any]:
     vendor = draft.get("vendor") or "GeneratedVendor"
     root = _topic("功能用例")

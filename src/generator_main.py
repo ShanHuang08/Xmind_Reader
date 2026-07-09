@@ -16,7 +16,7 @@ from generator.human_xmind_merger import (
 )
 from generator.test_case_generator import generate_test_cases_file
 from generator.test_case_summary import write_test_case_summary
-from xmind_writer.metersphere_xmind_writer import write_xmind_from_draft
+from xmind_writer.metersphere_xmind_writer import write_no_merge_key_copy, write_xmind_from_draft
 from xmind_writer.xmind_validator import validate_generated_xmind
 
 
@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         "--show-case-id",
         action="store_true",
         help="Deprecated compatibility option. Visible ID topics are always written.",
+    )
+    parser.add_argument(
+        "--no-merge-key-copy",
+        action="store_true",
+        help="Also export a delivery XMind copy with visible merge_key topics removed.",
     )
     args = parser.parse_args(argv)
 
@@ -87,10 +92,15 @@ def main(argv: list[str] | None = None) -> int:
     report = validate_generated_xmind(xmind_path, after, report_path)
     write_test_case_summary(after, summary_path)
     write_human_merge_manifest(after, manifest_path)
+    no_key_path = None
+    if args.no_merge_key_copy:
+        no_key_path = write_no_merge_key_copy(xmind_path)
     LOGGER.info("[%s] XMind written to %s", args.vendor, xmind_path)
     LOGGER.info("[%s] Validation report written to %s", args.vendor, report_path)
     LOGGER.info("[%s] Summary markdown written to %s", args.vendor, summary_path)
     LOGGER.info("[%s] Human merge manifest written to %s", args.vendor, manifest_path)
+    if no_key_path:
+        LOGGER.info("[%s] No-merge-key XMind copy written to %s", args.vendor, no_key_path)
     if not report.get("valid"):
         LOGGER.error(
             "[%s] XMind validation failed: %s",

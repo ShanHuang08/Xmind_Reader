@@ -13,7 +13,7 @@ The project now uses the previously debated visible-key approach as the practica
 
 This is intentionally not hidden metadata. XMind does not reliably preserve hidden metadata across manual editing, copy, and save workflows. A visible `merge_key` topic is less pretty, but it survives normal XMind editing and gives the merge process a stable anchor.
 
-For customer-facing or reviewer-facing delivery, a separate no-key XMind can be produced by removing `merge_key:` topics after generation. That no-key file is a delivery artifact only. It should not be used as the next round's human merge source unless we accept weaker title/path fallback matching.
+For customer-facing or reviewer-facing delivery, a separate no-key XMind can be produced with `--no-merge-key-copy`, which removes `merge_key:` topics after generation. That no-key file is a delivery artifact only. It should not be used as the next round's human merge source unless we accept weaker title/path fallback matching.
 
 ## Goal
 
@@ -293,7 +293,7 @@ Status: success
 
 Working XMind files should keep `merge_key:` topics because they are the robust merge anchors.
 
-When a clean delivery file is required, produce a copy such as:
+When a clean delivery file is required, run generate with `--no-merge-key-copy` to produce a copy such as:
 
 ```text
 output/<Vendor>/<Vendor>_test_cases_no_merge_key.xmind
@@ -333,6 +333,5 @@ For no-key delivery copies, validate readability and confirm there are no `merge
 ## Recommended Next Improvements
 
 1. Preserve human copy ordering in final XMind.
-2. Add a formal CLI option for no-key export, for example `--hide-merge-key` or `--export-no-merge-key-copy`.
-3. Add regression tests for CasinoGate endpoint role inference and remarks normalization.
-4. Add comparison report fields that clearly distinguish content changes caused by intentional remarks normalization.
+2. Add regression tests for CasinoGate endpoint role inference, remarks normalization, marker preservation, and no-key export.
+3. Add comparison report fields that clearly distinguish content changes caused by intentional remarks normalization.

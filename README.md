@@ -94,13 +94,14 @@ python main.py pdf --pdf Vendor_API_Spec.pdf --vendor Vendor
 ```bash
 python main.py generate --vendor Esoterica
 python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate_test_cases_copy.xmind
+python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate_test_cases_copy.xmind --no-merge-key-copy
 ```
 
 一次執行：建立 draft JSON → 產生 API parameter validation 與 User Behavior 案例 → 輸出 XMind → 回讀驗證。
 
 若提供 `--human-xmind`，generate 流程會先重新產生最新 base cases，再把人工維護的 XMind copy 合併回新版 draft。合併時會以 visible `merge_key:<stable_case_id>` 作為主要 matching key，保留人工調整過的 case title / steps，並透過 `<Vendor>_human_merge_manifest.json` 判斷人工刪除、新增與下一輪 merge 狀態。
 
-`merge_key` 是工作用 XMind 的穩定合併錨點；若需要交付不含 key 的乾淨 XMind，請另外輸出 no-key copy，不要拿 no-key copy 當下一輪 `--human-xmind` 來源。完整設計、限制與後續改善請看 [HUMAN_XMIND_MERGE_PLAN.md](HUMAN_XMIND_MERGE_PLAN.md)。
+`merge_key` 是工作用 XMind 的穩定合併錨點；若需要交付不含 key 的乾淨 XMind，可加 `--no-merge-key-copy` 另輸出 no-key copy。不要拿 no-key copy 當下一輪 `--human-xmind` 來源。完整設計、限制與後續改善請看 [HUMAN_XMIND_MERGE_PLAN.md](HUMAN_XMIND_MERGE_PLAN.md)。
 
 輸出位置：
 

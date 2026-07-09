@@ -105,6 +105,7 @@ Output folders:
                 "xmind_detail",
                 "human_xmind",
                 "show_case_id",
+                "no_merge_key_copy",
                 "log_level",
             ),
         )
@@ -266,6 +267,7 @@ Examples:
   python main.py generate --vendor Esoterica
   python main.py generate --vendor Esoterica --vendor-detail new_vendor_detail --output output
   python main.py generate --vendor Esoterica --human-xmind our_copy/Esoterica_test_cases.xmind
+  python main.py generate --vendor Esoterica --human-xmind our_copy/Esoterica_test_cases.xmind --no-merge-key-copy
 """,
     )
     generate.add_argument("--vendor", required=True, help="Vendor folder name.")
@@ -290,6 +292,11 @@ Examples:
         "--show-case-id",
         action="store_true",
         help="Debug option: write visible ID topics for stable_case_id values.",
+    )
+    generate.add_argument(
+        "--no-merge-key-copy",
+        action="store_true",
+        help="Also export a delivery XMind copy with visible merge_key topics removed.",
     )
 
 
