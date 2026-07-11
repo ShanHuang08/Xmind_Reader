@@ -522,6 +522,7 @@ def _expanded_request_parameters(endpoint: dict[str, Any]) -> list[dict[str, Any
     enriched_parameters = [
         _parameter_with_example_type(endpoint, parameter) for parameter in parameters
     ]
+    enriched_parameters = _sort_parameters_by_request_example(endpoint, enriched_parameters)
     child_parameters_by_parent = {
         str(parameter.get("name", "")).strip(): _child_parameters_from_request_example(
             endpoint, parameter
@@ -551,6 +552,34 @@ def _expanded_request_parameters(endpoint: dict[str, Any]) -> list[dict[str, Any
                 seen.add(child_name)
 
     return expanded
+
+
+def _sort_parameters_by_request_example(
+    endpoint: dict[str, Any], parameters: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    order = _request_example_key_order(endpoint.get("request_example"))
+    if not order:
+        return parameters
+    order_index = {name.lower(): index for index, name in enumerate(order)}
+    return [
+        parameter
+        for _, parameter in sorted(
+            enumerate(parameters),
+            key=lambda item: (
+                order_index.get(
+                    str(item[1].get("name", "")).strip().lower(),
+                    len(order_index) + item[0],
+                ),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _request_example_key_order(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return [str(key) for key in value.keys()]
 
 
 def _is_nested_only_parameter(
@@ -678,7 +707,7 @@ def _parameter_case(
         "endpoints": [endpoint_name],
         "parameter": parameter_name,
         "preconditions": _preconditions(context, endpoint),
-        "steps": _parameter_steps(endpoint, parameter, expected_error),
+        "steps": _parameter_steps(context, endpoint, parameter, expected_error),
         "remarks": _remarks(endpoint, parameter),
         "expected_error": expected_error,
         "tags": ["parameter_validation", "negative"],
@@ -701,21 +730,27 @@ def _expected_error_for_parameter(
 
 
 def _path_parameter_error(context: dict[str, Any], parameter_name: str) -> dict[str, Any]:
-    for item in context.get("error_codes", []):
-        code = str(item.get("code", "")).strip()
-        description = str(
-            item.get("context") or item.get("message") or item.get("description") or ""
-        ).strip()
-        if code == "0" and "unauthorized" in description.lower():
-            return {
-                "code": code,
-                "source": "documented",
-                "description": description,
-                "applies_to": parameter_name,
-            }
     fallback = deepcopy(context.get("parameter_error", {}))
     fallback.setdefault("applies_to", parameter_name)
     return fallback
+
+
+def _error_for_keywords(
+    context: dict[str, Any], keywords: tuple[str, ...]
+) -> dict[str, str] | None:
+    for item in context.get("error_codes", []):
+        text = " ".join(
+            str(item.get(key, "")) for key in ("code", "context", "message", "description")
+        ).lower()
+        if any(keyword in text for keyword in keywords):
+            return {
+                "code": str(item.get("code", "")).strip(),
+                "source": "documented",
+                "description": str(
+                    item.get("context") or item.get("message") or item.get("description") or ""
+                ),
+            }
+    return None
 
 
 def _preconditions(
@@ -732,8 +767,7 @@ def _preconditions(
 
 
 def _remarks(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
-    focus_parameter = "" if parameter.get("source") == "path_parameter" else parameter.get("name", "")
-    request = _request_payload(endpoint, focus_parameter)
+    request = _request_payload(endpoint)
     response = _response_payload(endpoint)
     return (
         f"{REMARKS_LABEL}\n"
@@ -749,40 +783,71 @@ def _remarks(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
 
 
 def _parameter_steps(
-    endpoint: dict[str, Any], parameter: dict[str, Any], expected_error: dict[str, Any]
+    context: dict[str, Any],
+    endpoint: dict[str, Any],
+    parameter: dict[str, Any],
+    expected_error: dict[str, Any],
 ) -> list[dict[str, str]]:
     parameter_name = str(parameter.get("name", "parameter"))
     lowered = parameter_name.lower()
     code = expected_error.get("code", "UNKNOWN_PARAMETER_ERROR")
-    error_response = _json_block(_expected_error_response(endpoint, expected_error))
+    error_response = _json_block(_expected_error_response(endpoint))
     steps: list[dict[str, str]] = []
 
     if parameter.get("source") == "path_parameter":
         return _path_parameter_steps(endpoint, parameter, code, error_response)
 
     if _is_optional_parameter(parameter):
-        return _optional_parameter_steps(endpoint, parameter)
+        return _optional_parameter_steps(context, endpoint, parameter)
 
     if _is_array_parameter(parameter):
         return _array_parameter_steps(endpoint, parameter, code, error_response)
 
     if "amount" in lowered:
-        amount_cases = [
-            (f"{parameter_name} doesn't set", f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}'),
-            (f"{parameter_name} Input blank", f'"{parameter_name}": ""'),
-            (
+        steps = [
+            _step_case(
+                f"{parameter_name} doesn't set",
+                f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}',
+                code,
+                error_response,
+            ),
+            _step_case(f"{parameter_name} Input blank", f'"{parameter_name}": ""', code, error_response),
+            _step_case(
                 f"{parameter_name} Input exceed 20 digit numbers",
                 f'"{parameter_name}": 123456789012345678901',
+                code,
+                error_response,
             ),
-            (f"{parameter_name} Input 9 decimal numbers", f'"{parameter_name}": 100.123456789'),
-            (f"{parameter_name} Input negative number", f'"{parameter_name}": -100.0'),
-            (f"{parameter_name} Input space", _space_request_line(endpoint, parameter)),
-            (f"{parameter_name} Input string", f'"{parameter_name}": "test"'),
+            _step_case(
+                f"{parameter_name} Input 9 decimal numbers",
+                f'"{parameter_name}": 100.123456789',
+                code,
+                error_response,
+            ),
+            _step_case_for_error(
+                f"{parameter_name} Input negative number",
+                f'"{parameter_name}": -100.0',
+                endpoint,
+                _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
+                or expected_error,
+            ),
+            _step_case(
+                f"{parameter_name} Input space",
+                _space_request_line(endpoint, parameter),
+                code,
+                error_response,
+            ),
+            _step_case(f"{parameter_name} Input string", f'"{parameter_name}": "test"', code, error_response),
         ]
-        return [
-            _step_case(title, request_line, code, error_response)
-            for title, request_line in amount_cases
-        ]
+        if _is_rollback_endpoint(endpoint):
+            steps.append(
+                _success_step_case(
+                    f"{parameter_name} Input lower than bet_amount",
+                    f'"{parameter_name}": 1',
+                    _json_block(_success_response(endpoint)),
+                )
+            )
+        return steps
 
     steps.append(
         _step_case(
@@ -811,12 +876,17 @@ def _parameter_steps(
 
     if lowered == "currency":
         steps.append(
-            _step_case("currency input wrong value", '"currency": "test"', code, error_response)
+            _step_case_for_error(
+                f"{parameter_name} Input invalid currency",
+                f'"{parameter_name}": "TWD"',
+                endpoint,
+                _error_for_keywords(context, ("currency mismatch",)) or expected_error,
+            )
         )
     elif _is_timestamp_parameter(parameter):
         steps.append(
             _step_case(
-                f"{parameter_name} input wrong data type",
+                _wrong_data_type_step_title(parameter),
                 _wrong_data_type_request_line(parameter),
                 code,
                 error_response,
@@ -837,7 +907,7 @@ def _parameter_steps(
     else:
         steps.append(
             _step_case(
-                f"{parameter_name} input wrong data type",
+                _wrong_data_type_step_title(parameter),
                 _wrong_data_type_request_line(parameter),
                 code,
                 error_response,
@@ -896,6 +966,7 @@ def _invalid_path_parameter_value(name: str, valid_value: str) -> str:
 
 
 def _optional_parameter_steps(
+    context: dict[str, Any],
     endpoint: dict[str, Any],
     parameter: dict[str, Any],
 ) -> list[dict[str, str]]:
@@ -904,25 +975,54 @@ def _optional_parameter_steps(
     if _is_array_parameter(parameter):
         specs = _array_parameter_step_specs(endpoint, parameter)
     elif "amount" in lowered:
-        specs = [
-            (f"{parameter_name} doesn't set", _optional_amount_missing_request_line(parameter)),
-            (f"{parameter_name} Input blank", f'"{parameter_name}": ""'),
-            (
+        success_response = _json_block(_success_response(endpoint))
+        steps = [
+            _success_step_case(
+                f"{parameter_name} doesn't set",
+                _optional_amount_missing_request_line(parameter),
+                success_response,
+            ),
+            _success_step_case(f"{parameter_name} Input blank", f'"{parameter_name}": ""', success_response),
+            _success_step_case(
                 f"{parameter_name} Input exceed 20 digit numbers",
                 f'"{parameter_name}": 123456789012345678901',
+                success_response,
             ),
-            (f"{parameter_name} Input 9 decimal numbers", f'"{parameter_name}": 100.123456789'),
-            (f"{parameter_name} Input negative number", f'"{parameter_name}": -100.0'),
-            (f"{parameter_name} Input space", _space_request_line(endpoint, parameter)),
-            (f"{parameter_name} Input string", f'"{parameter_name}": "test"'),
+            _success_step_case(
+                f"{parameter_name} Input 9 decimal numbers",
+                f'"{parameter_name}": 100.123456789',
+                success_response,
+            ),
+            _step_case_for_error(
+                f"{parameter_name} Input negative number",
+                f'"{parameter_name}": -100.0',
+                endpoint,
+                _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
+                or context.get("parameter_error", {}),
+            ),
+            _success_step_case(
+                f"{parameter_name} Input space",
+                _space_request_line(endpoint, parameter),
+                success_response,
+            ),
+            _success_step_case(f"{parameter_name} Input string", f'"{parameter_name}": "test"', success_response),
         ]
+        if _is_rollback_endpoint(endpoint):
+            steps.append(
+                _success_step_case(
+                    f"{parameter_name} Input lower than bet_amount",
+                    f'"{parameter_name}": 1',
+                    success_response,
+                )
+            )
+        return steps
     else:
         specs = [
             (f"{parameter_name} doesn't set", f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}'),
             (f"{parameter_name} leave blank", f'"{parameter_name}": ""'),
             (f"{parameter_name} input space", _space_request_line(endpoint, parameter)),
             (
-                f"{parameter_name} input wrong data type",
+                _wrong_data_type_step_title(parameter),
                 _wrong_data_type_request_line(parameter),
             ),
         ]
@@ -1018,6 +1118,21 @@ def _step_case(
     }
 
 
+def _step_case_for_error(
+    title: str,
+    request_line: str,
+    endpoint: dict[str, Any],
+    expected_error: dict[str, Any],
+) -> dict[str, str]:
+    code = str(expected_error.get("code", "")).strip() or "UNKNOWN_PARAMETER_ERROR"
+    return _step_case(
+        title,
+        request_line,
+        code,
+        _json_block(_expected_error_response(endpoint)),
+    )
+
+
 def _success_step_case(title: str, request_line: str, success_response: str) -> dict[str, str]:
     return {
         "step": f"{title}\n{request_line}",
@@ -1078,39 +1193,18 @@ def _find_example_path_value(data: Any, name: str) -> Any:
     return current
 
 
-def _expected_error_response(
-    endpoint: dict[str, Any], expected_error: dict[str, Any]
-) -> dict[str, Any]:
+def _expected_error_response(endpoint: dict[str, Any]) -> dict[str, Any]:
     error = endpoint.get("error_response_example")
-    code = expected_error.get("code", "ERROR")
-    message = expected_error.get("description") or "Parameter validation error"
     if isinstance(error, dict) and error:
-        patched = deepcopy(error)
-        patched["timestamp"] = _current_unix_timestamp()
-        patched.setdefault("error", {})
-        if isinstance(patched["error"], dict):
-            patched["error"]["code"] = code
-            patched["error"]["message"] = message
-        return patched
-    return {
-        "result": "ERROR",
-        "timestamp": _current_unix_timestamp(),
-        "error": {
-            "code": code,
-            "message": message,
-        },
-    }
-
-
-def _current_unix_timestamp() -> int:
-    return int(time.time())
+        return error
+    return {}
 
 
 def _success_response(endpoint: dict[str, Any]) -> dict[str, Any]:
     success = endpoint.get("success_response_example")
     if isinstance(success, dict) and success:
         return success
-    return {"result": "OK"}
+    return {}
 
 
 def _wrong_data_type_request_line(parameter: dict[str, Any]) -> str:
@@ -1121,6 +1215,24 @@ def _wrong_data_type_request_line(parameter: dict[str, Any]) -> str:
     if _is_numeric_type(param_type) or "bool" in param_type:
         return f'"{name}": "test"'
     return f'"{name}": 123'
+
+
+def _wrong_data_type_step_title(parameter: dict[str, Any]) -> str:
+    name = str(parameter.get("name", "parameter"))
+    param_type = str(parameter.get("type", "")).lower()
+    if _is_string_type(param_type):
+        return f"{name} input int"
+    if _is_numeric_type(param_type) or "bool" in param_type:
+        return f"{name} input string"
+    return f"{name} input wrong data type"
+
+
+def _is_rollback_endpoint(endpoint: dict[str, Any]) -> bool:
+    role = str(endpoint.get("role", "")).lower()
+    path = str(endpoint.get("endpoint", "")).lower()
+    return any(term in role for term in ("rollback", "cancel_bet")) or any(
+        term in path for term in ("rollback", "refund", "cancel")
+    )
 
 
 def _space_request_line(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
@@ -1189,55 +1301,22 @@ def _endpoint_display_name(endpoint_path: str) -> str:
     return text.rsplit("/", 1)[-1] or text
 
 
-def _sample_request(parameters: list[dict[str, Any]], focus_parameter: str) -> str:
-    lines = ["{"]
-    for index, parameter in enumerate(parameters):
-        name = parameter.get("name", f"parameter{index + 1}")
-        sample = _sample_value(parameter)
-        suffix = "," if index < len(parameters) - 1 else ""
-        marker = "  // focus" if name == focus_parameter else ""
-        lines.append(f'  "{name}": {sample}{suffix}{marker}')
-    lines.append("}")
-    return "\n".join(lines)
-
-
-def _request_payload(endpoint: dict[str, Any], focus_parameter: str) -> str:
+def _request_payload(endpoint: dict[str, Any]) -> str:
     example = endpoint.get("request_example")
     if isinstance(example, dict) and example:
-        return _json_block(example, focus_parameter=focus_parameter)
-    return _sample_request(endpoint.get("request_parameters", []), focus_parameter)
+        return _json_block(example)
+    return _json_block({})
 
 
 def _response_payload(endpoint: dict[str, Any]) -> str:
     success = endpoint.get("success_response_example")
     if isinstance(success, dict) and success:
         return _json_block(success)
-    return _sample_response(endpoint.get("response_parameters", []))
+    return _json_block({})
 
 
-def _json_block(data: dict[str, Any], focus_parameter: str = "") -> str:
-    text = json.dumps(data, ensure_ascii=False, indent=2)
-    if not focus_parameter:
-        return text
-    lines = []
-    focus_name = str(focus_parameter).split("/")[-1]
-    needle = f'"{focus_name}":'
-    for line in text.splitlines():
-        if needle in line:
-            line += "  // focus"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _sample_response(parameters: list[dict[str, Any]]) -> str:
-    lines = ["{"]
-    for index, parameter in enumerate(parameters):
-        name = parameter.get("name", f"field{index + 1}")
-        sample = _sample_value(parameter)
-        suffix = "," if index < len(parameters) - 1 else ""
-        lines.append(f'  "{name}": {sample}{suffix}')
-    lines.append("}")
-    return "\n".join(lines)
+def _json_block(data: dict[str, Any]) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 def _sample_value(parameter: dict[str, Any]) -> str:
@@ -1251,13 +1330,13 @@ def _sample_value(parameter: dict[str, Any]) -> str:
     if "balance" in text or "cash" in text or "bonus" in text:
         return "100"
     if "url" in name or "url" in description:
-        return '"https://example.com/replay/4330252729"'
+        return '"https://example.com"'
     if "numeric string" in param_type:
         return '"10"'
     if name.endswith("id") or " identifier" in description or " id" in description:
         return f'"{parameter.get("name", "id")}_001"'
     if "timestamp" in text or "time" in text:
-        return "1786335355774"
+        return str(int(time.time()))
     if "int" in param_type or "long" in param_type or "decimal" in param_type:
         return "1"
     if "bool" in param_type:

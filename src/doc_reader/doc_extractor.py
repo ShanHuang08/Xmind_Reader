@@ -7,6 +7,7 @@ import json
 from collections import Counter
 from copy import deepcopy
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 
 CAPABILITY_RULES: dict[str, tuple[str, ...]] = {
@@ -184,24 +185,14 @@ def _parameter_rows(table: list[list[str]]) -> list[dict[str, str]]:
 
 def _attach_endpoint_examples(
     endpoint: dict[str, Any],
-    error_codes: list[dict[str, str]],
+    _error_codes: list[dict[str, str]],
     source_examples: dict[str, Any] | None = None,
 ) -> None:
-    request_parameters = endpoint.get("request_parameters", [])
-    response_parameters = endpoint.get("response_parameters", [])
     source_examples = source_examples or {}
-    if request_parameters:
-        endpoint["request_example"] = source_examples.get("request_example") or _example_object(
-            request_parameters,
-            include_optional=False,
-        )
-    if response_parameters:
-        endpoint["success_response_example"] = source_examples.get("success_response_example") or _example_object(
-            response_parameters,
-            include_optional=False,
-            response_mode=True,
-        )
-        endpoint["error_response_example"] = _error_response_example(error_codes)
+    for key in ("request_example", "success_response_example", "error_response_example"):
+        value = source_examples.get(key)
+        if value:
+            endpoint[key] = deepcopy(value)
 
 
 def _endpoint_json_examples(sections: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -215,8 +206,13 @@ def _endpoint_json_examples(sections: list[dict[str, Any]]) -> dict[str, dict[st
 
         current_endpoint = _endpoint_from_section_title(title) or section_endpoints[0]
         last_label_endpoint = ""
+        example_mode = ""
         for block in content:
-            parsed = _json_from_code_block(block)
+            block_mode = _content_example_mode(block)
+            if block_mode:
+                example_mode = block_mode
+
+            parsed = _example_from_code_block(block)
             if parsed is None:
                 endpoint_in_text = _endpoint_from_section_title(block)
                 if endpoint_in_text:
@@ -233,10 +229,9 @@ def _endpoint_json_examples(sections: list[dict[str, Any]]) -> dict[str, dict[st
             if not target_endpoint:
                 continue
             entry = examples.setdefault(target_endpoint, {})
-            if _looks_like_response_example(parsed):
-                entry.setdefault("success_response_example", parsed)
-            else:
-                entry.setdefault("request_example", parsed)
+            slot = _example_slot(label, example_mode, parsed)
+            entry.setdefault(slot, parsed)
+            if slot == "request_example":
                 last_label_endpoint = target_endpoint
         _copy_examples_to_shared_section_endpoints(examples, section_endpoints)
     return examples
@@ -270,6 +265,10 @@ def _unique_matches(values: list[str]) -> list[str]:
     return output
 
 
+def _example_from_code_block(block: str) -> Any | None:
+    return _json_from_code_block(block) or _query_params_from_code_block(block)
+
+
 def _json_from_code_block(block: str) -> Any | None:
     text = str(block or "").strip()
     start = text.find("{")
@@ -282,10 +281,60 @@ def _json_from_code_block(block: str) -> Any | None:
         return None
 
 
+def _query_params_from_code_block(block: str) -> dict[str, Any] | None:
+    text = str(block or "").strip()
+    if not text:
+        return None
+    first_line = text.splitlines()[0].strip()
+    if not first_line.startswith("?") and not urlsplit(first_line).query:
+        return None
+    query = urlsplit(first_line).query
+    if not query:
+        query = first_line[1:] if first_line.startswith("?") else ""
+    if not query:
+        return None
+    pairs = parse_qsl(query, keep_blank_values=True)
+    if not pairs:
+        return None
+    output: dict[str, Any] = {}
+    for key, value in pairs:
+        if key:
+            output[key] = value
+    return output or None
+
+
 def _code_block_label(block: str) -> str:
     text = str(block or "").strip()
     start = text.find("{")
     return text[:start].strip().lower() if start > 0 else ""
+
+
+def _content_example_mode(block: str) -> str:
+    text = re.sub(r"\s+", " ", str(block or "").strip().lower())
+    if text in {"request", "api request", "request body", "request example"}:
+        return "request"
+    if text in {"response", "api response", "response body", "response example"}:
+        return "response"
+    if text in {"error response", "api error response", "error response example"}:
+        return "error_response"
+    return ""
+
+
+def _example_slot(label: str, example_mode: str, parsed: Any) -> str:
+    normalized_label = re.sub(r"\s+", " ", str(label or "").strip().lower())
+    if "error" in normalized_label and "response" in normalized_label:
+        return "error_response_example"
+    if "request" in normalized_label:
+        return "request_example"
+    if "response" in normalized_label:
+        return "success_response_example"
+    if example_mode == "error_response":
+        return "error_response_example"
+    if example_mode == "request":
+        return "request_example"
+    if example_mode == "response":
+        return "success_response_example"
+    return "success_response_example" if _looks_like_response_example(parsed) else "request_example"
 
 
 def _endpoint_for_label(label: str, endpoints: list[str]) -> str:
@@ -309,141 +358,6 @@ def _looks_like_response_example(value: Any) -> bool:
     return (
         bool(keys & response_keys) or wallet_response_keys.issubset(keys)
     ) and not bool(keys & request_keys)
-
-
-def _example_object(
-    parameters: list[dict[str, str]],
-    include_optional: bool = False,
-    response_mode: bool = False,
-) -> dict[str, Any]:
-    output: dict[str, Any] = {}
-    for parameter in parameters:
-        if not _include_example_parameter(parameter, include_optional=include_optional):
-            continue
-        name = str(parameter.get("name", "")).strip()
-        if not name:
-            continue
-        value = _example_value(parameter, response_mode=response_mode)
-        _set_nested_value(output, name, value)
-    return output
-
-
-def _include_example_parameter(parameter: dict[str, str], include_optional: bool = False) -> bool:
-    name = str(parameter.get("name", "")).strip().lower()
-    description = str(parameter.get("description", "")).strip().lower()
-    required = str(parameter.get("required", "")).strip().upper()
-
-    if name in {"token", "data/token"}:
-        return True
-    if name == "type" and "only in credit" in description:
-        return False
-    if not include_optional and required in {"N", "NO", "FALSE", "0"}:
-        return False
-    return True
-
-
-def _set_nested_value(output: dict[str, Any], name: str, value: Any) -> None:
-    parts = [part for part in name.split("/") if part]
-    if not parts:
-        return
-    current = output
-    for part in parts[:-1]:
-        if not isinstance(current.get(part), dict):
-            current[part] = {}
-        current = current[part]
-    current[parts[-1]] = value
-
-
-def _example_value(parameter: dict[str, str], response_mode: bool = False) -> Any:
-    name = str(parameter.get("name", "")).lower()
-    param_type = str(parameter.get("type", "")).lower()
-    description = str(parameter.get("description", "")).lower()
-    text = " ".join([name, param_type, description])
-
-    if response_mode:
-        if name == "result":
-            return "OK"
-        if name == "timestamp":
-            return "20250825T163933Z"
-        if name.endswith("accountbalance") or name.endswith("accountfreebalance"):
-            return 999999
-        if name.endswith("accountcurrency"):
-            return "USD"
-        if name.endswith("transactionid"):
-            return "78ba204111ce"
-        if name.endswith("token"):
-            return "99aa356-2x99"
-        if param_type == "json":
-            return {}
-
-    if name == "sessionid":
-        return "7481b6cb-6aa3-46dc-a131-aea2d2a4797c"
-    if name == "hash":
-        return "validhashvalue"
-    if name == "amount":
-        return 10
-    if name == "gamename":
-        return "Burning Slot 40"
-    if name == "gameid":
-        return "LUCKYFRUITZ"
-    if name == "transactionid":
-        return "D4330252729-4459762329"
-    if name == "playid":
-        return "4330252729"
-    if name == "operation":
-        return "DEBIT"
-    if name == "gamemode":
-        return "REAL"
-    if name == "userid":
-        return "sampleUser78"
-    if name == "amountcurrency" or "currency" in text:
-        return "USD"
-    if name == "token":
-        return "r9CfvbG7B5NylcuDZb24"
-    if name == "playstatus":
-        return "1"
-    if name == "rounddetails":
-        return "Spin"
-    if name == "description":
-        return "OK"
-    if "url" in name or "url" in description:
-        return "https://example.com/replay/4330252729"
-    if "numeric string" in param_type:
-        return "10"
-    if name.endswith("id") or " identifier" in description or " id" in description:
-        return f"{parameter.get('name', 'id')}_001"
-    if "amount" in text:
-        return 10
-    if "timestamp" in text or "time" in text:
-        return "20250825T163933Z"
-    if "int" in param_type or "long" in param_type:
-        return 1
-    return f"sample_{parameter.get('name', 'value')}"
-
-
-def _error_response_example(error_codes: list[dict[str, str]]) -> dict[str, Any]:
-    selected = _select_error_code(error_codes)
-    return {
-        "result": "ERROR",
-        "timestamp": "20110322T152403Z",
-        "error": {
-            "code": selected.get("code", "ERROR"),
-            "message": selected.get("context", "Error"),
-        },
-    }
-
-
-def _select_error_code(error_codes: list[dict[str, str]]) -> dict[str, str]:
-    for item in error_codes:
-        context = str(item.get("context", "")).lower()
-        if "insufficient funds" in context:
-            return item
-    for item in error_codes:
-        code = str(item.get("code", "")).strip()
-        context = str(item.get("context", "")).lower()
-        if code and code != "0" and "success" not in context:
-            return item
-    return {"code": "ERROR", "context": "Error"}
 
 
 def _extract_error_codes(parsed: dict[str, Any], text: str) -> list[dict[str, str]]:

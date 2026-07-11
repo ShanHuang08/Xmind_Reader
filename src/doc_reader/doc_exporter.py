@@ -74,6 +74,23 @@ def _render_summary(detail: dict[str, Any]) -> str:
         keywords = ", ".join(endpoint.get("keywords", [])) or "none"
         lines.append(f"- `{endpoint['endpoint']}` | method: {methods} | section: {endpoint.get('section', '')} | keywords: {keywords}")
 
+    lines.extend(["", "## Pre Check", ""])
+    lines.append("| Endpoint | Request pre | Response pre | Error response pre |")
+    lines.append("|---|---:|---:|---:|")
+    for endpoint in detail.get("endpoints", []):
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{endpoint.get('endpoint', '')}`",
+                    _yes_no(bool(endpoint.get("request_example"))),
+                    _yes_no(bool(endpoint.get("success_response_example"))),
+                    _yes_no(bool(endpoint.get("error_response_example"))),
+                ]
+            )
+            + " |"
+        )
+
     lines.extend(["", "## Error Codes", ""])
     for item in detail.get("error_codes", [])[:80]:
         lines.append(f"- `{item['code']}`: {item.get('context', '')[:240]}")
@@ -85,6 +102,10 @@ def _render_summary(detail: dict[str, Any]) -> str:
             lines.append(f"- {paragraph}")
         lines.append("")
     return "\n".join(lines).strip() + "\n"
+
+
+def _yes_no(value: bool) -> str:
+    return "Y" if value else "N"
 
 
 def _raw_payload(detail: dict[str, Any]) -> dict[str, Any]:

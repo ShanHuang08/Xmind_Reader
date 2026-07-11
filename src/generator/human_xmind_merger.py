@@ -178,7 +178,7 @@ def merge_human_xmind_edits(
 
 def _normalize_human_added_remarks(human_cases: list[dict[str, Any]], draft: dict[str, Any]) -> None:
     for case in human_cases:
-        if not _needs_non_launch_remarks_fix(case):
+        if not (_needs_non_launch_remarks_fix(case) or _needs_api_payload_remarks_refresh(case)):
             continue
         endpoints = _endpoints_for_human_case(case, draft)
         if endpoints:
@@ -197,6 +197,19 @@ def _needs_non_launch_remarks_fix(case: dict[str, Any]) -> bool:
         return False
     remarks = str(case.get("remarks", ""))
     return "gameCode" in remarks and "lobbyUrl" in remarks and "ipAddress" in remarks
+
+
+def _needs_api_payload_remarks_refresh(case: dict[str, Any]) -> bool:
+    remarks = str(case.get("remarks", ""))
+    if "API request parameters" not in remarks or "Success response" not in remarks:
+        return False
+    stale_tokens = (
+        "20110322T152403Z",
+        '"result": "ERROR"',
+        "sample_",
+        "Error response",
+    )
+    return any(token in remarks for token in stale_tokens)
 
 
 def _endpoints_for_human_case(
@@ -437,18 +450,19 @@ def _overlay_human_case(
         merged["scenario"] = human_scenario
         fields.append("scenario")
 
-    base_steps = base_case.get("steps", []) if isinstance(base_case.get("steps"), list) else []
-    human_steps = human_case.get("steps", []) if isinstance(human_case.get("steps"), list) else []
-    if not human_steps and base_steps:
-        warnings.append(
-            {
-                "code": "human_steps_empty",
-                "message": f"Human steps are empty for {stable_case_key(base_case)}; base steps kept.",
-            }
-        )
-    elif _steps_changed(base_steps, human_steps):
-        merged["steps"] = human_steps
-        fields.append("steps")
+    if base_case.get("output_section") != API_PARAMETER_TEST_SECTION:
+        base_steps = base_case.get("steps", []) if isinstance(base_case.get("steps"), list) else []
+        human_steps = human_case.get("steps", []) if isinstance(human_case.get("steps"), list) else []
+        if not human_steps and base_steps:
+            warnings.append(
+                {
+                    "code": "human_steps_empty",
+                    "message": f"Human steps are empty for {stable_case_key(base_case)}; base steps kept.",
+                }
+            )
+        elif _steps_changed(base_steps, human_steps):
+            merged["steps"] = human_steps
+            fields.append("steps")
 
     human_markers = _source_markers(human_case.get("markers", []))
     base_markers = _source_markers(base_case.get("markers", []))
