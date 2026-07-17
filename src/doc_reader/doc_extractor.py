@@ -43,7 +43,7 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
     sections = _sections(parsed.get("paragraphs", []))
     endpoints = _extract_endpoints(parsed, sections)
     error_codes = _extract_error_codes(parsed, text)
-    endpoint_examples = _endpoint_json_examples(sections)
+    endpoint_examples = _endpoint_json_examples(sections, vendor_name)
     for endpoint in endpoints:
         _attach_endpoint_examples(endpoint, error_codes, endpoint_examples.get(endpoint.get("endpoint", ""), {}))
     checklist = _extract_vendor_master_checklist(parsed)
@@ -189,13 +189,18 @@ def _attach_endpoint_examples(
     source_examples: dict[str, Any] | None = None,
 ) -> None:
     source_examples = source_examples or {}
-    for key in ("request_example", "success_response_example", "error_response_example"):
+    for key in (
+        "request_example",
+        "success_response_example",
+        "error_response_example",
+        "additional_request_examples",
+    ):
         value = source_examples.get(key)
         if value:
             endpoint[key] = deepcopy(value)
 
 
-def _endpoint_json_examples(sections: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _endpoint_json_examples(sections: list[dict[str, Any]], vendor_name: str = "") -> dict[str, dict[str, Any]]:
     examples: dict[str, dict[str, Any]] = {}
     for section in sections:
         title = section.get("title", "")
@@ -207,19 +212,21 @@ def _endpoint_json_examples(sections: list[dict[str, Any]]) -> dict[str, dict[st
         current_endpoint = _endpoint_from_section_title(title) or section_endpoints[0]
         last_label_endpoint = ""
         example_mode = ""
+        example_label = ""
         for block in content:
             block_mode = _content_example_mode(block)
             if block_mode:
                 example_mode = block_mode
+                example_label = str(block)
 
-            parsed = _example_from_code_block(block)
-            if parsed is None:
+            parsed_examples = _examples_from_code_block(block)
+            if not parsed_examples:
                 endpoint_in_text = _endpoint_from_section_title(block)
                 if endpoint_in_text:
                     current_endpoint = endpoint_in_text
                 continue
 
-            label = _code_block_label(block)
+            label = _code_block_label(block) or example_label
             labeled_endpoint = _endpoint_for_label(label, section_endpoints)
             if labeled_endpoint:
                 current_endpoint = labeled_endpoint
@@ -229,12 +236,43 @@ def _endpoint_json_examples(sections: list[dict[str, Any]]) -> dict[str, dict[st
             if not target_endpoint:
                 continue
             entry = examples.setdefault(target_endpoint, {})
-            slot = _example_slot(label, example_mode, parsed)
-            entry.setdefault(slot, parsed)
-            if slot == "request_example":
-                last_label_endpoint = target_endpoint
+            for parsed in parsed_examples:
+                slot = _example_slot(label, example_mode, parsed)
+                _store_endpoint_example(entry, slot, label, parsed, vendor_name)
+                if slot == "request_example":
+                    last_label_endpoint = target_endpoint
+            example_label = ""
         _copy_examples_to_shared_section_endpoints(examples, section_endpoints)
     return examples
+
+
+def _store_endpoint_example(
+    entry: dict[str, Any], slot: str, label: str, parsed: Any, vendor_name: str = ""
+) -> None:
+    normalized_label = re.sub(r"\s+", " ", str(label or "").strip().lower())
+    if (
+        _is_softgaming_vendor(vendor_name)
+        and slot == "request_example"
+        and _is_additional_request_label(normalized_label)
+    ):
+        examples = entry.setdefault("additional_request_examples", [])
+        if isinstance(examples, list):
+            examples.append({"label": str(label).strip(), "example": parsed})
+        return
+    if slot not in entry or _is_placeholder_example(entry.get(slot)):
+        entry[slot] = parsed
+
+
+def _is_additional_request_label(normalized_label: str) -> bool:
+    return any(keyword in normalized_label for keyword in ("rollback", "cancel"))
+
+
+def _is_softgaming_vendor(vendor_name: str) -> bool:
+    return re.sub(r"[^a-z0-9]+", "", str(vendor_name).lower()) == "softgaming"
+
+
+def _is_placeholder_example(value: Any) -> bool:
+    return value in ({}, {"?": ""})
 
 
 def _copy_examples_to_shared_section_endpoints(
@@ -266,19 +304,43 @@ def _unique_matches(values: list[str]) -> list[str]:
 
 
 def _example_from_code_block(block: str) -> Any | None:
-    return _json_from_code_block(block) or _query_params_from_code_block(block)
+    examples = _examples_from_code_block(block)
+    return examples[0] if examples else None
 
 
-def _json_from_code_block(block: str) -> Any | None:
+def _examples_from_code_block(block: str) -> list[Any]:
+    json_examples = _json_examples_from_code_block(block)
+    if json_examples:
+        return json_examples
+    query_params = _query_params_from_code_block(block)
+    return [query_params] if query_params else []
+
+
+def _json_examples_from_code_block(block: str) -> list[Any]:
     text = str(block or "").strip()
     start = text.find("{")
     if start < 0:
-        return None
-    candidate = text[start:].strip()
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
+        return []
+    decoder = json.JSONDecoder()
+    examples = []
+    index = start
+    while index < len(text):
+        brace_index = text.find("{", index)
+        if brace_index < 0:
+            break
+        try:
+            value, end = decoder.raw_decode(text[brace_index:])
+        except json.JSONDecodeError:
+            index = brace_index + 1
+            continue
+        examples.append(value)
+        index = brace_index + end
+    return examples
+
+
+def _json_from_code_block(block: str) -> Any | None:
+    examples = _json_examples_from_code_block(block)
+    return examples[0] if examples else None
 
 
 def _query_params_from_code_block(block: str) -> dict[str, Any] | None:
@@ -298,7 +360,7 @@ def _query_params_from_code_block(block: str) -> dict[str, Any] | None:
         return None
     output: dict[str, Any] = {}
     for key, value in pairs:
-        if key:
+        if key and key != "?":
             output[key] = value
     return output or None
 
@@ -311,12 +373,16 @@ def _code_block_label(block: str) -> str:
 
 def _content_example_mode(block: str) -> str:
     text = re.sub(r"\s+", " ", str(block or "").strip().lower())
-    if text in {"request", "api request", "request body", "request example"}:
+    if (
+        text in {"request", "api request", "request body"}
+        or "request example" in text
+        or ("example" in text and any(keyword in text for keyword in ("rollback", "cancel")))
+    ):
         return "request"
-    if text in {"response", "api response", "response body", "response example"}:
-        return "response"
-    if text in {"error response", "api error response", "error response example"}:
+    if "error response" in text:
         return "error_response"
+    if text in {"response", "api response", "response body"} or "response example" in text:
+        return "response"
     return ""
 
 
@@ -326,6 +392,12 @@ def _example_slot(label: str, example_mode: str, parsed: Any) -> str:
         return "error_response_example"
     if "request" in normalized_label:
         return "request_example"
+    if (
+        isinstance(parsed, dict)
+        and "error" in parsed
+        and "request" not in normalized_label
+    ):
+        return "error_response_example"
     if "response" in normalized_label:
         return "success_response_example"
     if example_mode == "error_response":
@@ -377,11 +449,28 @@ def _extract_error_codes(parsed: dict[str, Any], text: str) -> list[dict[str, st
                 if len(row) <= max(code_index, message_index):
                     continue
                 code = row[code_index].strip()
-                if not _is_error_code(code):
+                if not _is_error_code(code, mode="explicit_code_column"):
                     continue
                 context = row[message_index].strip()
                 if exception_index is not None and len(row) > exception_index and row[exception_index].strip():
                     context = f"{context} | {row[exception_index].strip()}"
+                found.setdefault(code, context)
+        elif "message" in headers and any(
+            header in headers for header in ("related exception", "related exceptions", "description", "context")
+        ):
+            message_index = headers.index("message")
+            context_index = _first_header_index(
+                headers, ("related exception", "related exceptions", "description", "context")
+            )
+            for row in table[1:]:
+                if len(row) <= message_index:
+                    continue
+                code = row[message_index].strip()
+                if not _is_error_code(code, mode="message_as_code"):
+                    continue
+                context = ""
+                if context_index is not None and len(row) > context_index:
+                    context = row[context_index].strip()
                 found.setdefault(code, context)
 
     for section in sections:
@@ -397,7 +486,7 @@ def _extract_error_codes(parsed: dict[str, Any], text: str) -> list[dict[str, st
 
     for match in ERROR_CODE_RE.finditer(text):
         code = match.group(1)
-        if not _is_error_code(code):
+        if not _is_error_code(code, mode="numeric_only"):
             continue
         start = max(0, match.start() - 120)
         end = min(len(text), match.end() + 180)
@@ -441,15 +530,16 @@ def _error_codes_from_section_content(content: list[str]) -> dict[str, str]:
     tokens = [str(item).strip() for item in content if str(item).strip()]
     found: dict[str, str] = {}
     start = _error_section_data_start(tokens)
+    mode = _error_section_code_mode(tokens)
     index = start
     while index < len(tokens):
         code = tokens[index].strip()
-        if not _is_error_code(code):
+        if not _is_error_code(code, mode=mode):
             index += 1
             continue
         context_parts = []
         index += 1
-        while index < len(tokens) and not _is_error_code(tokens[index]):
+        while index < len(tokens) and not _is_error_code(tokens[index], mode=mode):
             token = tokens[index].strip()
             if token and _normalize_error_header(token) not in {"code", "message", "description", "context"}:
                 context_parts.append(token)
@@ -459,21 +549,52 @@ def _error_codes_from_section_content(content: list[str]) -> dict[str, str]:
 
 
 def _error_section_data_start(tokens: list[str]) -> int:
+    mode = _error_section_code_mode(tokens)
     for index, token in enumerate(tokens):
-        if _is_error_code(token):
+        if _is_error_code(token, mode=mode):
             return index
     return 0
 
 
-def _is_error_code(value: str) -> bool:
-    return bool(re.fullmatch(r"\d{1,6}", str(value).strip()))
+def _error_section_code_mode(tokens: list[str]) -> str:
+    normalized = [_normalize_error_header(token) for token in tokens[:8]]
+    if "code" in normalized:
+        return "explicit_code_column"
+    if "message" in normalized and any(
+        header in normalized for header in ("related exception", "related exceptions")
+    ):
+        return "message_as_code"
+    return "numeric_only"
+
+
+def _is_error_code(value: str, mode: str = "numeric_only") -> bool:
+    text = str(value).strip()
+    if re.fullmatch(r"\d{1,6}", text):
+        return True
+    if mode == "numeric_only":
+        return False
+    if not text or len(text) > 80:
+        return False
+    lowered = text.lower()
+    if mode == "message_as_code":
+        return any(term in lowered for term in ("error", "invalid", "failed", "expired", "funds", "signature"))
+    if mode == "explicit_code_column":
+        return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{2,}", text))
+    return False
 
 
 def _sorted_error_codes(found: dict[str, str]) -> list[dict[str, str]]:
     return [
         {"code": code, "context": context}
-        for code, context in sorted(found.items(), key=lambda item: int(item[0]))
+        for code, context in sorted(found.items(), key=lambda item: _error_code_sort_key(item[0]))
     ]
+
+
+def _error_code_sort_key(code: str) -> tuple[int, int | str]:
+    text = str(code).strip()
+    if text.isdigit():
+        return (0, int(text))
+    return (1, text.lower())
 
 
 def _capability_profile(

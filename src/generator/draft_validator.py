@@ -23,6 +23,7 @@ try:
         REQUIRED_TEST_CASE_FIELDS,
         SCHEMA_VERSION,
     )
+    from generator.user_behavior_text_normalizer import debit_credit_output_section_aliases
 except ModuleNotFoundError:  # pragma: no cover - supports python -m src.generator...
     from .draft_schema import (
         ALLOWED_OUTPUT_SECTIONS,
@@ -38,6 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover - supports python -m src.generat
         REQUIRED_TEST_CASE_FIELDS,
         SCHEMA_VERSION,
     )
+    from .user_behavior_text_normalizer import debit_credit_output_section_aliases
 
 
 @dataclass(frozen=True)
@@ -200,7 +202,8 @@ def _validate_output_section(
         )
 
     expected_section = KNOWLEDGE_CATEGORY_TO_XMIND_SECTION.get(category)
-    if expected_section and output_section and output_section != expected_section:
+    allowed_aliases = debit_credit_output_section_aliases().get(expected_section, set())
+    if expected_section and output_section and output_section not in {expected_section, *allowed_aliases}:
         errors.append(
             _error(
                 f"{path}.output_section",

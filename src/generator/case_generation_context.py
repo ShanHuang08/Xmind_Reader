@@ -26,6 +26,7 @@ def build_generation_context(draft: dict[str, Any]) -> dict[str, Any]:
     """Return the subset of draft data needed by deterministic generators."""
     return {
         "vendor": draft.get("vendor", ""),
+        "source_files": draft.get("source_files", {}),
         "capability_profile": draft.get("capability_profile", {}),
         "endpoint_roles": draft.get("endpoint_roles", []),
         "endpoint_analysis": draft.get("endpoint_analysis", {}),
@@ -54,7 +55,13 @@ def _select_parameter_error(error_codes: list[dict[str, Any]]) -> dict[str, str]
     for item in error_codes:
         text = " ".join(str(item.get(key, "")) for key in ("code", "context", "message", "description"))
         lowered = text.lower()
-        if "bad parameter" in lowered or "bad parameters" in lowered or "invalid request" in lowered:
+        if (
+            "bad parameter" in lowered
+            or "bad parameters" in lowered
+            or "invalid request" in lowered
+            or "invalid parameter" in lowered
+            or "invalid parameters" in lowered
+        ):
             return {
                 "code": str(item.get("code", "")).strip(),
                 "source": "documented",

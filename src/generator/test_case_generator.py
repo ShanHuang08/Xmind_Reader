@@ -19,10 +19,23 @@ from generator.draft_schema import (
 )
 from generator.draft_validator import validate_draft
 from generator.reference_selector import selected_categories, select_reference_files
+from generator.user_behavior_text_normalizer import normalize_user_behavior_debit_credit_terms
 
 
 GENERATED_BY = "deterministic-parameter-generator/v1"
 USER_BEHAVIOR_GENERATED_BY = "user-behavior-reference-generator/v1"
+VENDOR_TEST_SCENARIO_GENERATED_BY = "vendor-test-scenario-import/v1"
+
+UPPERCASE_ACTION_PARAMETER_VALUES = {
+    "action": "ACTION",
+    "method": "METHOD",
+    "operation": "OPERATION",
+    "command": "COMMAND",
+    "type": "TYPE",
+    "requesttype": "REQUESTTYPE",
+    "transactiontype": "TRANSACTIONTYPE",
+    "subtype": "SUBTYPE",
+}
 
 CATEGORY_OUTPUT_PRIORITY = [
     "launch_game",
@@ -71,10 +84,14 @@ def generate_test_cases_for_draft(
     categories = _merge_categories(categories, _game_type_categories(context))
     references = [str(path) for path in select_reference_files(xmind_detail_root, categories)]
     cases: list[dict[str, Any]] = []
-    cases.extend(_user_behavior_cases(context, xmind_detail_root, categories))
+    user_behavior_cases = _user_behavior_cases(context, xmind_detail_root, categories)
+    cases.extend(normalize_user_behavior_debit_credit_terms(context, user_behavior_cases))
 
     if include_parameter_validation:
         cases.extend(_parameter_validation_cases(context, references))
+
+    vendor_cases = _vendor_test_scenario_cases(context)
+    cases.extend(normalize_user_behavior_debit_credit_terms(context, vendor_cases))
 
     return cases
 
@@ -100,7 +117,7 @@ def generate_test_cases_file(
             if not (
                 isinstance(case, dict)
                 and case.get("source_reference", {}).get("generated_by")
-                in {GENERATED_BY, USER_BEHAVIOR_GENERATED_BY}
+                in {GENERATED_BY, USER_BEHAVIOR_GENERATED_BY, VENDOR_TEST_SCENARIO_GENERATED_BY}
             )
         ]
 
@@ -494,6 +511,150 @@ def _parameter_validation_cases(
     return cases
 
 
+def _vendor_test_scenario_cases(context: dict[str, Any]) -> list[dict[str, Any]]:
+    if str(context.get("vendor", "")) != "SoftGaming":
+        return []
+    path = _vendor_test_scenarios_path(context)
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as file:
+        data = json.load(file)
+    raw_cases = data.get("cases", []) if isinstance(data, dict) else []
+    if not isinstance(raw_cases, list):
+        return []
+
+    endpoint_index = _endpoint_index(context)
+    cases: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_cases, start=1):
+        if not isinstance(item, dict):
+            continue
+        draft_case = item.get("draft_case", {})
+        if not isinstance(draft_case, dict):
+            continue
+        case = deepcopy(draft_case)
+        output_section = str(
+            case.get("output_section") or item.get("output_section") or "User Behavior > Bet and Settle"
+        )
+        if output_section == API_PARAMETER_TEST_SECTION:
+            continue
+        endpoint_name = str(case.get("endpoint") or item.get("endpoint") or "").strip()
+        endpoint = endpoint_index.get(endpoint_name) or _minimal_endpoint(endpoint_name)
+        parameter_name = str(case.get("parameter") or item.get("parameter") or "").strip()
+
+        case["id"] = str(case.get("id") or f"vendor-scenario-{index:02d}")
+        case["output_section"] = output_section
+        case["category"] = str(case.get("category") or item.get("category") or "vendor_provided")
+        case["scenario"] = str(case.get("scenario") or item.get("title") or f"Vendor scenario {index}")
+        case["module"] = str(case.get("module") or item.get("module") or _endpoint_display_name(endpoint_name))
+        case["endpoint"] = endpoint_name
+        case["endpoint_name"] = str(case.get("endpoint_name") or _endpoint_display_name(endpoint_name))
+        case["endpoint_group"] = str(case.get("endpoint_group") or endpoint.get("role", ""))
+        case["endpoints"] = case.get("endpoints") or ([endpoint_name] if endpoint_name else [])
+        case["parameter"] = parameter_name
+        case["preconditions"] = _preconditions(context, endpoint)
+        case["remarks"] = _remarks(endpoint, {"name": parameter_name})
+        case["tags"] = _vendor_case_tags(case)
+        case["priority"] = str(case.get("priority") or "P2")
+        case["source_reference"] = _vendor_case_source_reference(case, item, path)
+        case["unresolved_questions"] = case.get("unresolved_questions") or []
+        if _vendor_case_looks_negative(case) and not case.get("expected_error"):
+            case["expected_error"] = deepcopy(context.get("parameter_error", {}))
+        cases.append(case)
+    return cases
+
+
+def _vendor_test_scenarios_path(context: dict[str, Any]) -> Path:
+    source_files = context.get("source_files", {})
+    vendor_detail = ""
+    if isinstance(source_files, dict):
+        vendor_detail = str(source_files.get("vendor_detail", ""))
+    if vendor_detail:
+        return Path(vendor_detail) / "vendor_test_scenarios.json"
+    vendor = str(context.get("vendor", ""))
+    return Path("new_vendor_detail") / vendor / "vendor_test_scenarios.json"
+
+
+def _endpoint_index(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    endpoints: dict[str, dict[str, Any]] = {}
+    for endpoint in context.get("endpoint_roles", []):
+        if not isinstance(endpoint, dict):
+            continue
+        name = str(endpoint.get("endpoint", "")).strip()
+        if name:
+            endpoints[name] = endpoint
+    return endpoints
+
+
+def _minimal_endpoint(endpoint_name: str) -> dict[str, Any]:
+    return {
+        "endpoint": endpoint_name,
+        "role": "",
+        "request_example": {},
+        "success_response_example": {},
+        "error_response_example": {},
+    }
+
+
+def _vendor_case_tags(case: dict[str, Any]) -> list[str]:
+    tags = case.get("tags", [])
+    output = [str(tag) for tag in tags] if isinstance(tags, list) else []
+    return _merge_unique(output, ["vendor_provided"])
+
+
+def _vendor_case_source_reference(
+    case: dict[str, Any], item: dict[str, Any], path: Path
+) -> dict[str, Any]:
+    source = case.get("source_reference", {})
+    if not isinstance(source, dict):
+        source = {}
+    source.setdefault("generated_by", VENDOR_TEST_SCENARIO_GENERATED_BY)
+    source.setdefault("vendor_test_scenarios", str(path))
+    for key in ("source_file", "source_run", "source_test_number", "source_anchor"):
+        value = item.get(key)
+        if value not in (None, ""):
+            source.setdefault(key, value)
+    return source
+
+
+def _vendor_case_looks_negative(case: dict[str, Any]) -> bool:
+    fields = [
+        case.get("category", ""),
+        case.get("scenario", ""),
+        case.get("preconditions", ""),
+        case.get("remarks", ""),
+    ]
+    for step in case.get("steps", []) or []:
+        if isinstance(step, dict):
+            fields.append(step.get("step", ""))
+            fields.append(step.get("expected", ""))
+    text = "\n".join(str(field).lower() for field in fields)
+    return any(
+        keyword in text
+        for keyword in (
+            "fail",
+            "failed",
+            "failure",
+            "reject",
+            "error",
+            "invalid",
+            "wrong",
+            "duplicate",
+            "negative",
+            "失败",
+            "錯誤",
+            "错误",
+        )
+    )
+
+
+def _merge_unique(primary: list[Any], extra: list[Any]) -> list[Any]:
+    output: list[Any] = []
+    for item in primary + extra:
+        if item not in output:
+            output.append(item)
+    return output
+
+
 def _path_parameters(endpoint: dict[str, Any]) -> list[dict[str, Any]]:
     endpoint_name = str(endpoint.get("endpoint", ""))
     names = []
@@ -791,7 +952,7 @@ def _parameter_steps(
     parameter_name = str(parameter.get("name", "parameter"))
     lowered = parameter_name.lower()
     code = expected_error.get("code", "UNKNOWN_PARAMETER_ERROR")
-    error_response = _json_block(_expected_error_response(endpoint))
+    error_response = _json_block(_expected_error_response(context, endpoint, expected_error))
     steps: list[dict[str, str]] = []
 
     if parameter.get("source") == "path_parameter":
@@ -802,6 +963,9 @@ def _parameter_steps(
 
     if _is_array_parameter(parameter):
         return _array_parameter_steps(endpoint, parameter, code, error_response)
+
+    if lowered in {"hmac", "hash"}:
+        return _hash_parameter_steps(endpoint, parameter, code, error_response)
 
     if "amount" in lowered:
         steps = [
@@ -827,6 +991,7 @@ def _parameter_steps(
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
                 f'"{parameter_name}": -100.0',
+                context,
                 endpoint,
                 _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
                 or expected_error,
@@ -879,8 +1044,9 @@ def _parameter_steps(
             _step_case_for_error(
                 f"{parameter_name} Input invalid currency",
                 f'"{parameter_name}": "TWD"',
+                context,
                 endpoint,
-                _error_for_keywords(context, ("currency mismatch",)) or expected_error,
+                _error_for_keywords(context, ("currency mismatch", "invalid currency")) or expected_error,
             )
         )
     elif _is_timestamp_parameter(parameter):
@@ -900,10 +1066,6 @@ def _parameter_steps(
                 error_response,
             )
         )
-    elif lowered == "hash":
-        steps.append(
-            _step_case("hash input wrong value", '"hash": "wrongvalue"', code, error_response)
-        )
     else:
         steps.append(
             _step_case(
@@ -918,16 +1080,45 @@ def _parameter_steps(
         steps.append(
             _step_case("userId input space", '"userId": " playerA "', code, error_response)
         )
-    if _is_player_name_parameter(parameter_name):
+    if _is_uppercase_action_parameter(parameter):
         steps.append(
             _step_case(
                 f"{parameter_name} input uppercase",
-                f'"{parameter_name}": "PLAYERA"',
+                _uppercase_action_request_line(endpoint, parameter),
                 code,
                 error_response,
             )
         )
     return steps
+
+
+def _hash_parameter_steps(
+    endpoint: dict[str, Any],
+    parameter: dict[str, Any],
+    expected_code: str,
+    error_response: str,
+) -> list[dict[str, str]]:
+    parameter_name = str(parameter.get("name", "hmac"))
+    return [
+        _step_case(
+            f"{parameter_name} doesn't set",
+            f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}',
+            expected_code,
+            error_response,
+        ),
+        _step_case(
+            f"{parameter_name} leave blank",
+            f'"{parameter_name}": ""',
+            expected_code,
+            error_response,
+        ),
+        _step_case(
+            f"{parameter_name} input int",
+            f'"{parameter_name}": 123',
+            expected_code,
+            error_response,
+        ),
+    ]
 
 
 def _path_parameter_steps(
@@ -996,6 +1187,7 @@ def _optional_parameter_steps(
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
                 f'"{parameter_name}": -100.0',
+                context,
                 endpoint,
                 _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
                 or context.get("parameter_error", {}),
@@ -1101,16 +1293,18 @@ def _first_required_array_item_field(
 def _step_case(
     title: str, request_line: str, expected_code: str, error_response: str
 ) -> dict[str, str]:
+    response = str(error_response).strip()
+    response_text = f"\n{response}" if response and response != "{}" else ""
     if expected_code == "UNKNOWN_PARAMETER_ERROR":
         expected = (
             "The API returns a parameter validation failure. "
-            "The exact parameter error code is not documented in the vendor doc.\n"
-            f"{error_response}"
+            "The exact parameter error code is not documented in the vendor doc."
+            f"{response_text}"
         )
     else:
         expected = (
-            f"The API returns a parameter validation error with error code {expected_code}.\n"
-            f"{error_response}"
+            f"The API returns a parameter validation error with error code {expected_code}."
+            f"{response_text}"
         )
     return {
         "step": f"{title}\n{request_line}",
@@ -1121,6 +1315,7 @@ def _step_case(
 def _step_case_for_error(
     title: str,
     request_line: str,
+    context: dict[str, Any],
     endpoint: dict[str, Any],
     expected_error: dict[str, Any],
 ) -> dict[str, str]:
@@ -1129,7 +1324,7 @@ def _step_case_for_error(
         title,
         request_line,
         code,
-        _json_block(_expected_error_response(endpoint)),
+        _json_block(_expected_error_response(context, endpoint, expected_error)),
     )
 
 
@@ -1193,11 +1388,56 @@ def _find_example_path_value(data: Any, name: str) -> Any:
     return current
 
 
-def _expected_error_response(endpoint: dict[str, Any]) -> dict[str, Any]:
+def _expected_error_response(
+    context: dict[str, Any], endpoint: dict[str, Any], expected_error: dict[str, Any]
+) -> dict[str, Any]:
     error = endpoint.get("error_response_example")
-    if isinstance(error, dict) and error:
-        return error
+    if isinstance(error, dict) and error and _is_parameter_validation_error_response(error):
+        return _replace_error_response_code(error, expected_error)
     return {}
+
+
+def _replace_error_response_code(template: dict[str, Any], expected_error: dict[str, Any]) -> dict[str, Any]:
+    response = deepcopy(template)
+    code = str(expected_error.get("code", "")).strip()
+    if not code or code == "UNKNOWN_PARAMETER_ERROR":
+        return response
+    key = _error_response_code_key(response)
+    if key:
+        response[key] = code
+    return response
+
+
+def _error_response_code_key(response: dict[str, Any]) -> str:
+    for key in ("error", "message", "code", "error_code", "errorCode"):
+        if key in response:
+            return key
+    return ""
+
+
+def _is_parameter_validation_error_response(error: dict[str, Any]) -> bool:
+    message = str(error.get("error") or error.get("message") or error.get("description") or "")
+    normalized = message.lower()
+    transaction_error_terms = (
+        "transaction failed",
+        "insufficient funds",
+        "insufficient balance",
+        "rollback",
+        "duplicate",
+        "already processed",
+    )
+    if any(term in normalized for term in transaction_error_terms):
+        return False
+    parameter_error_terms = (
+        "invalid parameter",
+        "invalid parameters",
+        "parameter",
+        "invalid signature",
+        "missing",
+        "required",
+        "wrong",
+    )
+    return any(term in normalized for term in parameter_error_terms)
 
 
 def _success_response(endpoint: dict[str, Any]) -> dict[str, Any]:
@@ -1269,29 +1509,33 @@ def _is_numeric_type(param_type: str) -> bool:
     return any(token in param_type for token in ("int", "long", "float", "decimal", "number", "double"))
 
 
-def _is_player_name_parameter(parameter_name: str) -> bool:
-    normalized = "".join(ch for ch in parameter_name.lower() if ch.isalnum())
-    exact_names = {
-        "userid",
-        "username",
-        "user",
-        "playerid",
-        "playername",
-        "player",
-        "memberid",
-        "membername",
-        "account",
-        "accountid",
-        "accountname",
-        "loginname",
-    }
-    if normalized in exact_names:
+def _is_uppercase_action_parameter(parameter: dict[str, Any]) -> bool:
+    normalized = _normalized_parameter_name(str(parameter.get("name", "")))
+    if normalized in UPPERCASE_ACTION_PARAMETER_VALUES:
         return True
-    player_terms = ("player", "user", "member", "account", "login")
-    name_terms = ("name", "id")
-    return any(term in normalized for term in player_terms) and any(
-        term in normalized for term in name_terms
+    description = str(parameter.get("description", "")).lower()
+    return normalized in {"type", "subtype"} and any(
+        term in description for term in ("action", "operation", "command")
     )
+
+
+def _uppercase_action_request_line(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
+    name = str(parameter.get("name", "parameter"))
+    normalized = _normalized_parameter_name(name)
+    normal = _normal_request_value(endpoint, parameter)
+    try:
+        value = json.loads(normal)
+    except json.JSONDecodeError:
+        value = normal.strip('"')
+    if isinstance(value, str) and value:
+        uppercase_value = value.upper()
+    else:
+        uppercase_value = UPPERCASE_ACTION_PARAMETER_VALUES.get(normalized, "ACTION")
+    return f'"{name}": {json.dumps(uppercase_value, ensure_ascii=False)}'
+
+
+def _normalized_parameter_name(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
 def _endpoint_display_name(endpoint_path: str) -> str:
