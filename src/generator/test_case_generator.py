@@ -852,6 +852,9 @@ def _parameter_case(
     parameter_name = parameter.get("name", "")
     scenario = API_PARAMETER_CASE_TITLE_TEMPLATE.format(parameter=parameter_name)
     expected_error = _expected_error_for_parameter(context, parameter)
+    expected_error["response_json"] = _expected_error_response(
+        context, endpoint, expected_error
+    )
     if expected_error.get("source", "").startswith("inferred") and "inference_reason" not in expected_error:
         expected_error["inference_reason"] = (
             "No endpoint-specific parameter validation code was found; selected the closest documented vendor code."
@@ -1392,20 +1395,42 @@ def _expected_error_response(
     context: dict[str, Any], endpoint: dict[str, Any], expected_error: dict[str, Any]
 ) -> dict[str, Any]:
     error = endpoint.get("error_response_example")
-    if isinstance(error, dict) and error and _is_parameter_validation_error_response(error):
-        return _replace_error_response_code(error, expected_error)
+    if isinstance(error, dict) and error:
+        # Vendor docs commonly provide one fixed Error Name example (for
+        # example INSUFFICIENT_BALANCE) while the error-code table separately
+        # documents the HTTP-level parameter error. Reuse the response shape,
+        # but replace the Error Name selected by the parameter-error rule.
+        if _is_parameter_validation_error_response(error) or _has_fixed_error_name(error):
+            return _replace_error_response_code(error, expected_error)
     return {}
 
 
 def _replace_error_response_code(template: dict[str, Any], expected_error: dict[str, Any]) -> dict[str, Any]:
     response = deepcopy(template)
     code = str(expected_error.get("code", "")).strip()
-    if not code or code == "UNKNOWN_PARAMETER_ERROR":
+    error_name = _parameter_error_name(expected_error)
+    if not code and not error_name:
         return response
     key = _error_response_code_key(response)
     if key:
-        response[key] = code
+        response[key] = error_name or code
     return response
+
+
+def _parameter_error_name(expected_error: dict[str, Any]) -> str:
+    """Map the selected HTTP parameter error to the documented Error Name."""
+    description = str(expected_error.get("description", "")).lower()
+    if "invalid request" in description or "missing/invalid parameters" in description:
+        return "INVALID_REQUEST"
+    if "insufficient balance" in description or "insufficient funds" in description:
+        return "INSUFFICIENT_FUNDS"
+    return ""
+
+
+def _has_fixed_error_name(response: dict[str, Any]) -> bool:
+    """Return whether the example uses the vendor's uppercase Error Name format."""
+    value = response.get("error")
+    return isinstance(value, str) and bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", value))
 
 
 def _error_response_code_key(response: dict[str, Any]) -> str:

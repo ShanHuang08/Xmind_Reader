@@ -73,7 +73,10 @@ python main.py xmind --input EGTDigital_test_cases.xmind --vendor EGTDigital
 ```bash
 python main.py doc --input Vendor_Esoterica.doc
 python main.py doc --input Vendor_Esoterica.doc --vendor Esoterica
+python main.py doc --input Vendor_Esoterica.doc --vendor Esoterica --force
 ```
+
+Doc reader 會依文件章節順序抽取 endpoint 的 request / response `<pre>` 範例。支援 JSON body，也支援 GET 常見的 URL encoded query，例如 `?token=abc&amount=100` 會轉成 JSON object。若 source file 未變更會跳過重建；調整 parser 或想重新產出 `new_vendor_detail/<Vendor>/` 時請加 `--force`。
 
 ### URL 補充讀取
 
@@ -99,9 +102,13 @@ python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate
 
 一次執行：建立 draft JSON → 產生 API parameter validation 與 User Behavior 案例 → 輸出 XMind → 回讀驗證。
 
-若提供 `--human-xmind`，generate 流程會先重新產生最新 base cases，再把人工維護的 XMind copy 合併回新版 draft。合併時會以 visible `merge_key:<stable_case_id>` 作為主要 matching key，保留人工調整過的 case title / steps，並透過 `<Vendor>_human_merge_manifest.json` 判斷人工刪除、新增與下一輪 merge 狀態。
+API parameter test 會優先使用 doc reader 抽到的 request / response pre。request/response 範例不會從 parameter table 自產 sample；抓不到 pre 時輸出 `{}`，讓缺資料明確暴露。API parameter case 的參數順序會依 request pre 的欄位順序排列，pre 沒出現但 parameter table 有列的欄位會排在後面。
+
+若提供 `--human-xmind`，generate 流程會先重新產生最新 base cases，再把人工維護的 XMind copy 合併回新版 draft。合併時會以 visible `merge_key:<stable_case_id>` 作為主要 matching key，保留人工調整過的 case title、steps、XMind markers，並透過 `<Vendor>_human_merge_manifest.json` 判斷人工刪除、新增與下一輪 merge 狀態。API parameter steps 由 generator 重新產生，不用 human copy 的舊 steps 覆蓋，避免 vendor doc 更新後留下過期預期結果。
 
 `merge_key` 是工作用 XMind 的穩定合併錨點；若需要交付不含 key 的乾淨 XMind，可加 `--no-merge-key-copy` 另輸出 no-key copy。不要拿 no-key copy 當下一輪 `--human-xmind` 來源。完整設計、限制與後續改善請看 [HUMAN_XMIND_MERGE_PLAN.md](HUMAN_XMIND_MERGE_PLAN.md)。
+
+`--show-case-id` 目前只是相容舊 CLI 的 deprecated option；工作用 XMind 會固定寫入 `merge_key:` topics。
 
 輸出位置：
 
@@ -113,6 +120,7 @@ output/<Vendor>/
   <Vendor>_test_cases_summary.md
   <Vendor>_human_merge_report.md
   <Vendor>_human_merge_manifest.json
+  <Vendor>_test_cases_no_merge_key.xmind  # only when --no-merge-key-copy is used
 ```
 
 
@@ -164,6 +172,7 @@ new_vendor_detail/
     error_codes.json                  Error code 對照
     capability_profile.json           Vendor 支援能力
     vendor_master_checklist.json      Vendor 功能 checklist
+    game_codes.json                   遊戲代碼/類型表格
     raw_doc.json                      解析後原始段落/表格
     source_meta.json                  來源檔 meta
     vendor_pdf/                       PDF reader 輸出
@@ -181,6 +190,10 @@ output/
     draft_test_cases.json             工作 draft（含生成案例）
     <Vendor>_test_cases.xmind         生成的 XMind
     <Vendor>_test_cases_validation_report.json
+    <Vendor>_test_cases_summary.md    生成案例摘要與分類統計
+    <Vendor>_human_merge_report.md    human copy merge 報告
+    <Vendor>_human_merge_manifest.json
+    <Vendor>_test_cases_no_merge_key.xmind  可選，乾淨交付 copy
 src/
   main.py                             CLI 統一入口
   xmind_reader_main.py                XMind 流程控制
@@ -213,7 +226,7 @@ src/
 | 檔案 | 功能 |
 |---|---|
 | `xmind_reader_main.py` | 流程主控制器。解析 CLI 引數，依序呼叫 parser → extractor → chunker → exporter，並做增量處理決策（skip / full / incremental / preserve / raw_only）。 |
-| `parser/xmind_reader.py` | XMind 解析核心。解開 ZIP、自動偵測 `content.json` 或 `content.xml`，解析為 sheets → topics 樹狀結構，辨識 `case：` 開頭的測試用例並抽出結構化欄位。 |
+| `parser/xmind_reader.py` | XMind 解析核心。解開 ZIP、自動偵測 `content.json` 或 `content.xml`，解析為 sheets → topics 樹狀結構，辨識 `case：` 開頭的測試用例並抽出結構化欄位；會讀取 `merge_key:`、markers、notes、labels、hyperlinks 等可支援欄位。 |
 | `extractor/knowledge_extractor.py` | 知識抽取。推斷 module / api_name，用 18 種關鍵字規則自動打 tags，抽取 validation_points / db_checks，計算 content_hash 供增量更新。 |
 | `chunker/knowledge_chunker.py` | 知識切分。依 module 和 tags 切分為 chunk，用 SequenceMatcher 偵測 ≥92% 相似度的疑似重複 case。 |
 | `exporters/json_exporter.py` | JSON 匯出。輸出 raw、source_meta、summary、extraction_report、duplicate_report、chunks。 |
@@ -225,8 +238,8 @@ src/
 |---|---|
 | `doc_reader_main.py` | 流程主控制器。檢查 `source_meta.json` 判斷是否已處理，未變更則跳過。 |
 | `doc_reader/doc_parser.py` | 文件解析。`.doc` 走 MIME/HTML 解碼，`.docx` 走 python-docx，`.html` 走 lxml。輸出段落、表格（含 checkbox）、連結，並保留 `<pre>` / code block 內容。 |
-| `doc_reader/doc_extractor.py` | Vendor API 知識抽取。提取 endpoints（regex）、error codes、vendor master checklist、capability profile（關鍵字規則 + checklist 優先）、request/response parameter tables，以及 doc code block 中的 request / success response example。 |
-| `doc_reader/doc_exporter.py` | 匯出 7 個檔案：api_summary.md、endpoints.json、error_codes.json、capability_profile.json、vendor_master_checklist.json、source_meta.json、raw_doc.json。 |
+| `doc_reader/doc_extractor.py` | Vendor API 知識抽取。提取 endpoints（regex）、error codes、vendor master checklist、capability profile（關鍵字規則 + checklist 優先）、request/response parameter tables，以及 doc code block 中的 request / success / error response example。pre 解析優先照章節中的 `request` / `response` 標題分配，支援 JSON body 與 GET URL encoded query。 |
+| `doc_reader/doc_exporter.py` | 匯出 api_summary.md、endpoints.json、error_codes.json、capability_profile.json、vendor_master_checklist.json、game_codes.json、source_meta.json、raw_doc.json。`api_summary.md` 會列出 Pre Check，標示每個 endpoint 是否抓到 request / response / error response pre。 |
 
 ### PDF Reader 流程 (`python main.py pdf`)
 
@@ -262,10 +275,24 @@ src/
 | `generator/case_generation_context.py` | 生成上下文。從 draft 取出 generation context（capability_profile、endpoint_roles、endpoint_analysis、error_codes、game_codes），選擇 parameter error code，產生預設測試帳號。 |
 | `generator/endpoint_analyzer.py` | Endpoint topology / parameter semantics 分析器。從 endpoint role 和 request parameters 判斷 betAndSettle combined endpoint、multiple bets endpoint 形態、settlement 是否有 round-end control parameter / jackpot control parameter。 |
 | `generator/reference_selector.py` | 參考知識選擇。依 capability_profile + endpoint_analysis 選擇 mandatory、conditional mandatory、capability-specific categories，並找出對應的 xmind_detail chunk 檔案作為參考。 |
-| `generator/test_case_generator.py` | 測試案例生成器。遍歷每個 endpoint 的 request parameters，產生 required/optional/array 參數測項；同時從 User_Behavior_map 參考案例產生 Launch Game、Bet and Settle、Cancel Bet、Balance、Game type 等 User Behavior 測項。 |
+| `generator/test_case_generator.py` | 測試案例生成器。遍歷每個 endpoint 的 request parameters，產生 required/optional/array 參數測項；API parameter remarks 和 expected response 使用 doc pre，沒有 pre 就輸出 `{}`，不自產 response sample；若 error response pre 看起來是 parameter validation shape，會沿用該 shape 並替換 code 欄位；同時從 User_Behavior_map 參考案例產生 Launch Game、Bet and Settle、Cancel Bet、Balance、Game type 等 User Behavior 測項。 |
+| `generator/human_xmind_merger.py` | Human-edited XMind merge。以 `merge_key:<stable_case_id>` 對齊新舊 case，保留 human scenario / steps / markers，追蹤人工新增與刪除，並刷新舊的 API payload remarks，避免 launch-game payload 或舊 error sample 污染新版案例。 |
+| `generator/test_case_summary.py` | 產生 `<Vendor>_test_cases_summary.md`，統計 User Behavior / API parameter test 數量、抽到的 User_Behavior_map 分支與 endpoint topology 摘要。 |
 | `xmind_writer/metersphere_profile_extractor.py` | MeterSphere profile 提取。從 golden XMind 參考檔抽出 case 欄位風格、topic 深度、writer guidance，供 writer 遵循。 |
-| `xmind_writer/metersphere_xmind_writer.py` | XMind 寫入器。將驗證過的 draft 寫為 XMind ZIP（content.json + metadata.json + manifest.json），依 output_section 建立層級結構。 |
+| `xmind_writer/metersphere_xmind_writer.py` | XMind 寫入器。將驗證過的 draft 寫為 XMind ZIP（content.json + metadata.json + manifest.json），依 output_section 建立層級結構，寫入 visible `merge_key:` topics 與 XMind markers；也可產生移除 merge key 的 no-key delivery copy。 |
 | `xmind_writer/xmind_validator.py` | XMind 回讀驗證。用 xmind_reader 讀回生成的 XMind，比對 case 數量、scenario、層級結構是否正確。 |
+
+### API Parameter Test 產生規則
+
+- Request / success response / error response body 使用 doc pre 抽到的資料；缺 pre 時輸出 `{}`，不從 parameter table 自產 response sample。
+- Error response pre 若看起來是 parameter validation shape，會沿用 doc pre 的 response shape，並把可辨識的 code 欄位替換成該測項選到的錯誤碼；若是 insufficient funds、duplicate、rollback 等交易錯誤 shape，則不拿來套 parameter validation。
+- Request pre 支援 JSON body 與 GET URL encoded query；URL query 會轉為 JSON object，方便人類 review。
+- Case 排序以 endpoint 為群組；endpoint 內的 request parameters 依 request pre 欄位順序排列，path parameter 仍會先產生。
+- `amount Input negative number` 會優先關聯文件中包含 `Insufficient funds` / `Insufficient balance` 的 error code。
+- rollback/refund 類 endpoint 若有 `amount`，會加上 `amount Input lower than bet_amount`。
+- request 內若有 `currency`，會加上 `currency Input invalid currency`，並優先關聯 `Currency mismatch`。
+- data type 測項會依 doc parameter type 命名，例如 string 參數產生 `input int`，int/bool 參數產生 `input string`；array/object 仍保留特殊測項。
+- timestamp/time 類 sample value 會用目前 Unix timestamp 產生，避免固定舊時間。
 
 
 ## Codex 閱讀順序
@@ -308,16 +335,16 @@ src/
 目前限制：
 
 - Confluence 匯出的 `.doc` 表格如果欄位跨列、換行或 section 標題包含多個 endpoint，request / response table 可能會配錯 endpoint。
-- 文件中的 request URL example 不一定會被保留下來。
+- 文件中的 GET request URL example 若以 `?key=value` 或完整 URL query 形式放在 pre，會被轉成 JSON object；若只出現在一般文字段落，仍不一定會被保留下來。
 - response format 若只出現在非 JSON 文字段落，仍不一定能完整抽取。
-- optional parameter 是否放進 request example 仍依規則推斷。
-- error response example 目前套用同一個 response shape，再把 code/message 替換。
+- request / response example 只從 doc pre 抽取，不會從 parameter table 自產 sample；缺 pre 時會在 `api_summary.md` 的 Pre Check 顯示 `N`。
+- error response example 只從 error response pre 抽取；沒有 error response pre 時，API parameter expected response body 會是 `{}`。若 error response pre 是 parameter validation shape，generator 可能只替換其中的 code 欄位。
 - `game code` 表格欄位空白時使用 fallback。
-- parameter normal value 是 heuristic，仍可能和 vendor 真實格式不同。
+- 個別 step 內的 parameter normal value 仍可能用 heuristic 補值，仍可能和 vendor 真實格式不同。
 
 改進方向：
 
-- 增強 code block / URL example extractor，保留原始 request URL、JSON body、success/error response 與 `example_source`。
+- 增強 code block / URL example extractor，保留原始 request URL、JSON body、success/error response 與 `example_source`，並在抓不到 pre 時提供更清楚的 parser 調整線索。
 - 增加 endpoint section parser profile，處理同一 heading 包含多個 endpoint 的情況。
 - 建立 parameter value generator profile，依 type / description / enum / format 產生更接近 vendor 文件的值。
 - 強化 error code selector，依 parameter name / endpoint role 選擇更準確的 error code。
