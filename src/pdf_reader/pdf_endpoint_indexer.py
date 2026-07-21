@@ -16,6 +16,8 @@ _ROLE_MAP: dict[str, str] = {
     # --- endpoint last-path-segment ---
     "authenticate":       "authentication",
     "auth":               "authentication",
+    "gen-signature":      "authentication",
+    "gensignature":       "authentication",
     "getaccount":         "authentication",
     "getbalance":         "balance",
     "balance":            "balance",
@@ -130,6 +132,15 @@ TABLE_ENDPOINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 5) LABELED_NEXT_LINE_FULL_URL — URL on the line after "Path:" / "Endpoint:".
+#    Some Sphinx pages render endpoint fields as:
+#      Path:
+#      https://{operator-wallet-url}/balance
+LABELED_NEXT_LINE_FULL_URL_RE = re.compile(
+    r"^\s*(?P<endpoint>https?://[^\s|<>`]+)\s*$",
+    re.IGNORECASE,
+)
+
 # 5) API_PATH — bare /api/… path (fallback, lowest priority)
 #    e.g.  "/api/v1/games/list" in running text
 API_PATH_RE = re.compile(
@@ -233,6 +244,9 @@ def _find_endpoint_candidates(markdown: str) -> list[dict[str, Any]]:
         matches.extend(METHOD_FULL_URL_RE.finditer(line))
         matches.extend(LABELED_ENDPOINT_RE.finditer(line))
         matches.extend(TABLE_ENDPOINT_RE.finditer(line))
+        adjacent_url_match = _labeled_next_line_url_match(lines, index)
+        if adjacent_url_match:
+            matches.append(adjacent_url_match)
         if not matches:
             matches.extend(API_PATH_RE.finditer(line))
 
@@ -384,8 +398,26 @@ def _nearest_heading(headings: list[tuple[int, str]], line_index: int) -> str:
     return previous[-1] if previous else ""
 
 
+def _labeled_next_line_url_match(lines: list[str], line_index: int) -> re.Match[str] | None:
+    line = lines[line_index].strip()
+    if not line.startswith(("http://", "https://")):
+        return None
+    previous = _previous_non_empty_line(lines, line_index)
+    if not re.match(r"^(?:path|endpoint|endpoints|url|端點地址)\s*[:：]?\s*$", previous, re.IGNORECASE):
+        return None
+    return LABELED_NEXT_LINE_FULL_URL_RE.match(line)
+
+
+def _previous_non_empty_line(lines: list[str], line_index: int) -> str:
+    for line in reversed(lines[max(0, line_index - 6) : line_index]):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
 def _nearby_method(lines: list[str], line_index: int) -> str:
-    window = " ".join(lines[max(0, line_index - 2) : min(len(lines), line_index + 3)])
+    window = " ".join(lines[max(0, line_index - 4) : min(len(lines), line_index + 8)])
     match = re.search(r"\b(GET|POST|PUT|DELETE|PATCH)\b", window, re.IGNORECASE)
     return match.group(1) if match else ""
 
@@ -465,6 +497,7 @@ def _document_method(lines: list[str]) -> str:
 def _clean_api_name(heading: str, endpoint: str) -> str:
     if heading:
         heading = re.sub(r"[*_`]+", "", heading)
+        heading = heading.replace("¶", "")
         heading = re.sub(r"^\d+(?:\.\d+)*\s*", "", heading).strip()
         if heading and heading.lower() not in _GENERIC_HEADINGS and len(heading) <= 80:
             return heading
