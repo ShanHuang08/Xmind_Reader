@@ -31,6 +31,10 @@ def build_generation_context(draft: dict[str, Any]) -> dict[str, Any]:
         "endpoint_roles": draft.get("endpoint_roles", []),
         "endpoint_analysis": draft.get("endpoint_analysis", {}),
         "error_codes": draft.get("error_codes", []),
+        "parameter_dependencies": draft.get("parameter_dependencies", {}),
+        "parameter_dependency_validation_report": draft.get(
+            "parameter_dependency_validation_report", {}
+        ),
         "game_codes": draft.get("game_codes", []),
         "generation_mapping": draft.get("generation_mapping", {}),
         "case_authoring_rules": draft.get("case_authoring_rules", {}),

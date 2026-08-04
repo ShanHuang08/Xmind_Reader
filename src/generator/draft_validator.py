@@ -220,9 +220,10 @@ def _validate_api_parameter_case(
 ) -> None:
     output_section = test_case.get("output_section", "")
     category = test_case.get("category", "")
-    is_parameter_case = (
-        output_section == API_PARAMETER_TEST_SECTION or category == "parameter_validation"
-    )
+    is_parameter_case = output_section == API_PARAMETER_TEST_SECTION or category in {
+        "parameter_validation",
+        "parameter_dependency_validation",
+    }
     if not is_parameter_case:
         return
 
@@ -247,7 +248,11 @@ def _validate_api_parameter_case(
         return
 
     expected_scenario = API_PARAMETER_CASE_TITLE_TEMPLATE.format(parameter=parameter)
-    if scenario and scenario != expected_scenario:
+    dependency_scenario = (
+        category == "parameter_dependency_validation"
+        and scenario.startswith(f"case：check the {parameter} validation when ")
+    )
+    if scenario and scenario != expected_scenario and not dependency_scenario:
         human_overrides = test_case.get("human_overrides", [])
         if isinstance(human_overrides, list) and "scenario" in human_overrides:
             warnings.append(

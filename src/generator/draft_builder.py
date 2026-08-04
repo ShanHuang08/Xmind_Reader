@@ -101,6 +101,10 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
     capability_profile = _read_json(vendor_dir / "capability_profile.json")
     endpoints = _read_json(vendor_dir / "endpoints.json")
     error_codes = _read_json(vendor_dir / "error_codes.json")
+    dependency_path = vendor_dir / "parameter_dependencies.json"
+    dependency_report_path = vendor_dir / "parameter_dependency_validation_report.json"
+    parameter_dependencies = _read_json(dependency_path) if dependency_path.exists() else {}
+    dependency_report = _read_json(dependency_report_path) if dependency_report_path.exists() else {}
     checklist_path = vendor_dir / "vendor_master_checklist.json"
     checklist = _read_json(checklist_path) if checklist_path.exists() else []
     game_codes_path = vendor_dir / "game_codes.json"
@@ -124,6 +128,7 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
             "capability_profile": str(vendor_dir / "capability_profile.json"),
             "endpoints": str(vendor_dir / "endpoints.json"),
             "error_codes": str(vendor_dir / "error_codes.json"),
+            "parameter_dependencies": str(dependency_path) if dependency_path.exists() else "",
         },
         "capability_profile": capability_profile,
         "vendor_master_checklist": checklist,
@@ -131,6 +136,8 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
         "endpoint_roles": endpoint_roles,
         "endpoint_analysis": analyze_endpoint_topology(endpoint_roles, error_codes),
         "error_codes": error_codes,
+        "parameter_dependencies": parameter_dependencies,
+        "parameter_dependency_validation_report": dependency_report,
         "supplementary_sources": _supplementary_sources(vendor_dir),
         "case_authoring_rules": _case_authoring_rules(vendor, endpoints, game_codes),
         "generation_mapping": _generation_mapping(),
@@ -170,6 +177,11 @@ def _endpoint_role(
         "request_example": endpoint.get("request_example", {}),
         "success_response_example": endpoint.get("success_response_example", {}),
         "error_response_example": endpoint.get("error_response_example", {}),
+        "parameter_dependency": endpoint.get("parameter_dependency", False),
+        "dependency_schema_version": endpoint.get("dependency_schema_version", ""),
+        "dependency_selectors": endpoint.get("dependency_selectors", []),
+        "dependency_affected_parameters": endpoint.get("dependency_affected_parameters", []),
+        "parameter_dependencies": endpoint.get("parameter_dependencies", []),
     }
 
 

@@ -32,6 +32,11 @@ def render_test_case_summary(draft: dict[str, Any]) -> str:
         if case.get("output_section") == API_PARAMETER_SECTION
         or case.get("category") == "parameter_validation"
     ]
+    dependency_cases = [
+        case for case in api_parameter_cases
+        if case.get("category") == "parameter_dependency_validation"
+    ]
+    standard_parameter_cases = [case for case in api_parameter_cases if case not in dependency_cases]
 
     lines = [
         f"# {vendor} Test Case Summary",
@@ -42,6 +47,8 @@ def render_test_case_summary(draft: dict[str, Any]) -> str:
         "|---|---:|",
         f"| User Behavior | {len(user_behavior_cases)} |",
         f"| API parameter test | {len(api_parameter_cases)} |",
+        f"| Standard parameter cases | {len(standard_parameter_cases)} |",
+        f"| Dependency parameter cases | {len(dependency_cases)} |",
         "",
         "## User Behavior 抽到的種類",
         "",
@@ -61,6 +68,9 @@ def render_test_case_summary(draft: dict[str, Any]) -> str:
 
     lines.extend(["", "## 簡單分析", ""])
     lines.extend(_analysis_lines(draft, user_behavior_cases, api_parameter_cases))
+    dependency_endpoints = sorted({str(case.get("endpoint", "")) for case in dependency_cases})
+    if dependency_endpoints:
+        lines.append(f"- Dependency endpoints: {', '.join(dependency_endpoints)}")
     return "\n".join(lines).rstrip() + "\n"
 
 

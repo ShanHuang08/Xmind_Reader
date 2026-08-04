@@ -9,6 +9,8 @@ from copy import deepcopy
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+from doc_reader.parameter_dependency import compile_parameter_dependencies
+
 
 CAPABILITY_RULES: dict[str, tuple[str, ...]] = {
     "multiple_bets": ("multiple bet", "multiple bets", "same round", "multi bet"),
@@ -43,6 +45,7 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
     sections = _sections(parsed.get("paragraphs", []))
     endpoints = _extract_endpoints(parsed, sections)
     error_codes = _extract_error_codes(parsed, text)
+    dependency_profile, dependency_report = compile_parameter_dependencies(endpoints, error_codes)
     endpoint_examples = _endpoint_json_examples(sections, vendor_name)
     for endpoint in endpoints:
         _attach_endpoint_examples(endpoint, error_codes, endpoint_examples.get(endpoint.get("endpoint", ""), {}))
@@ -56,6 +59,8 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
         "sections": sections,
         "endpoints": endpoints,
         "error_codes": error_codes,
+        "parameter_dependencies": dependency_profile,
+        "parameter_dependency_validation_report": dependency_report,
         "capability_profile": profile,
         "vendor_master_checklist": checklist,
         "game_codes": game_codes,

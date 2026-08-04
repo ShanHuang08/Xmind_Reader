@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import email
 import re
+from copy import deepcopy
 from email import policy
 from pathlib import Path
 from typing import Any
@@ -136,7 +137,7 @@ def _parse_html_document(path: Path, html_text: str) -> dict[str, Any]:
             cells = []
             detailed_cells = []
             for cell in row.xpath("./th|./td"):
-                text = _clean(cell.text_content())
+                text = _clean_table_cell(cell)
                 checkbox = _checkbox_state(cell)
                 cells.append(text if checkbox is None else checkbox)
                 detailed_cells.append(
@@ -188,6 +189,17 @@ def _clean_code_block(value: str) -> str:
     text = (value or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = [line.rstrip() for line in text.split("\n")]
     return "\n".join(lines).strip()
+
+
+def _clean_table_cell(cell: etree._Element) -> str:
+    """Preserve authored line boundaries in table cells while normalizing spacing."""
+    cloned = deepcopy(cell)
+    for break_element in cloned.xpath(".//br"):
+        break_element.tail = "\n" + (break_element.tail or "")
+        break_element.drop_tag()
+    text = cloned.text_content().replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t\f\v]+", " ", line).strip() for line in text.split("\n")]
+    return "\n".join(line for line in lines if line).strip()
 
 
 def _checkbox_state(cell: etree._Element) -> str | None:

@@ -69,6 +69,7 @@ ALLOWED_OUTPUT_SECTIONS = {
 
 KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "parameter_validation": "API parameter test",
+    "parameter_dependency_validation": "API parameter test",
     "launch_game": "User Behavior > Launch Game",
     "authenticate": "User Behavior > Launch Game",
     "authentication_is_necessary": "User Behavior > Bet and Settle",

@@ -15,6 +15,8 @@ def export_vendor_detail(detail: dict[str, Any], output_root: Path) -> dict[str,
         "api_summary": vendor_dir / "api_summary.md",
         "endpoints": vendor_dir / "endpoints.json",
         "error_codes": vendor_dir / "error_codes.json",
+        "parameter_dependencies": vendor_dir / "parameter_dependencies.json",
+        "parameter_dependency_validation_report": vendor_dir / "parameter_dependency_validation_report.json",
         "capability_profile": vendor_dir / "capability_profile.json",
         "vendor_master_checklist": vendor_dir / "vendor_master_checklist.json",
         "game_codes": vendor_dir / "game_codes.json",
@@ -24,6 +26,11 @@ def export_vendor_detail(detail: dict[str, Any], output_root: Path) -> dict[str,
     paths["api_summary"].write_text(_render_summary(detail), encoding="utf-8")
     _write_json(detail.get("endpoints", []), paths["endpoints"])
     _write_json(detail.get("error_codes", []), paths["error_codes"])
+    _write_json(detail.get("parameter_dependencies", {}), paths["parameter_dependencies"])
+    _write_json(
+        detail.get("parameter_dependency_validation_report", {}),
+        paths["parameter_dependency_validation_report"],
+    )
     _write_json(detail.get("capability_profile", {}), paths["capability_profile"])
     _write_json(detail.get("vendor_master_checklist", []), paths["vendor_master_checklist"])
     _write_json(detail.get("game_codes", []), paths["game_codes"])
@@ -90,6 +97,18 @@ def _render_summary(detail: dict[str, Any]) -> str:
             )
             + " |"
         )
+
+    lines.extend(["", "## Parameter Dependencies", ""])
+    profile = detail.get("parameter_dependencies", {})
+    for endpoint in profile.get("endpoints", []):
+        state = endpoint.get("validation_status", "disabled")
+        lines.append(f"- `{endpoint.get('endpoint', '')}`: {state}")
+        if endpoint.get("selectors"):
+            lines.append(f"  - selectors: {', '.join(endpoint['selectors'])}")
+        if endpoint.get("affected_parameters"):
+            lines.append(
+                f"  - affected fields: {', '.join(endpoint['affected_parameters'])}"
+            )
 
     lines.extend(["", "## Error Codes", ""])
     for item in detail.get("error_codes", [])[:80]:

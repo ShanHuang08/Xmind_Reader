@@ -20,11 +20,13 @@ from generator.draft_schema import (
 from generator.draft_validator import validate_draft
 from generator.reference_selector import selected_categories, select_reference_files
 from generator.user_behavior_text_normalizer import normalize_user_behavior_debit_credit_terms
+from doc_reader.parameter_dependency import canonical_parameter_path
 
 
 GENERATED_BY = "deterministic-parameter-generator/v1"
 USER_BEHAVIOR_GENERATED_BY = "user-behavior-reference-generator/v1"
 VENDOR_TEST_SCENARIO_GENERATED_BY = "vendor-test-scenario-import/v1"
+DEPENDENCY_GENERATED_BY = "parameter-dependency-generator/v1"
 
 UPPERCASE_ACTION_PARAMETER_VALUES = {
     "action": "ACTION",
@@ -117,7 +119,12 @@ def generate_test_cases_file(
             if not (
                 isinstance(case, dict)
                 and case.get("source_reference", {}).get("generated_by")
-                in {GENERATED_BY, USER_BEHAVIOR_GENERATED_BY, VENDOR_TEST_SCENARIO_GENERATED_BY}
+                in {
+                    GENERATED_BY,
+                    USER_BEHAVIOR_GENERATED_BY,
+                    VENDOR_TEST_SCENARIO_GENERATED_BY,
+                    DEPENDENCY_GENERATED_BY,
+                }
             )
         ]
 
@@ -503,12 +510,259 @@ def _parameter_validation_cases(
             continue
         for parameter in _path_parameters(endpoint):
             cases.append(_parameter_case(context, endpoint, parameter, reference_files))
+        dependency_enabled = bool(endpoint.get("parameter_dependency"))
+        dependency_rules = endpoint.get("parameter_dependencies", []) if dependency_enabled else []
+        affected = {
+            canonical_parameter_path(value)
+            for value in endpoint.get("dependency_affected_parameters", [])
+        }
         for parameter in _expanded_request_parameters(endpoint):
             parameter_name = parameter.get("name", "")
             if not parameter_name:
                 continue
+            if dependency_enabled and canonical_parameter_path(parameter_name) in affected:
+                continue
             cases.append(_parameter_case(context, endpoint, parameter, reference_files))
+        if dependency_enabled:
+            if not isinstance(dependency_rules, list) or not dependency_rules:
+                raise ValueError(
+                    f"Dependency endpoint {endpoint_name!r} is enabled but contains no rules."
+                )
+            cases.extend(
+                _dependency_contextual_parameter_cases(
+                    context, endpoint, dependency_rules, reference_files
+                )
+            )
     return cases
+
+
+def _dependency_contextual_parameter_cases(
+    context: dict[str, Any],
+    endpoint: dict[str, Any],
+    rules: list[dict[str, Any]],
+    reference_files: list[str],
+) -> list[dict[str, Any]]:
+    """Apply existing parameter step functions inside each dependency context."""
+    parameters = {
+        canonical_parameter_path(parameter.get("name", "")): parameter
+        for parameter in _expanded_request_parameters(endpoint)
+        if isinstance(parameter, dict)
+    }
+    output: list[dict[str, Any]] = []
+    for rule in rules:
+        field = str(rule.get("affected_field", ""))
+        parameter = parameters.get(canonical_parameter_path(field))
+        if not parameter:
+            raise ValueError(
+                f"Dependency affected field {field!r} is missing from expanded request parameters."
+            )
+        state = str(rule.get("field_state", ""))
+        condition = rule.get("when", {}) if isinstance(rule.get("when"), dict) else {}
+        condition_text = _dependency_condition_text(condition)
+        expected_error = {
+            "code": str(rule.get("error_code", "")),
+            "source": "dependency_remark",
+            "description": f"Explicit dependency rule {rule.get('rule_id', '')}",
+        }
+        expected_error["response_json"] = _expected_error_response(
+            context, endpoint, expected_error
+        )
+        contextual_parameter = dict(parameter)
+        if state == "required":
+            contextual_parameter["required"] = "Y"
+            case_kind = "required_validation"
+            steps = _parameter_steps(
+                context, endpoint, contextual_parameter, expected_error
+            )
+        elif state == "optional":
+            contextual_parameter["required"] = "N"
+            case_kind = "optional_validation"
+            steps = _optional_parameter_steps(
+                context, endpoint, contextual_parameter
+            )
+        elif state == "forbidden":
+            case_kind = "forbidden_validation"
+            steps = [
+                _step_case(
+                    f"{field} set when it must be omitted",
+                    _dependency_request_line(
+                        field, _dependency_normal_request_value(endpoint, field)
+                    ),
+                    _required_parameter_error_code(expected_error),
+                    _json_block(expected_error["response_json"]),
+                )
+            ]
+        else:
+            raise ValueError(
+                f"Unsupported dependency field state {state!r} for {field!r}."
+            )
+
+        steps = [_format_dependency_step_payload(step, field) for step in steps]
+        constraint = rule.get("value_constraint")
+        if isinstance(constraint, dict):
+            invalid = _invalid_constraint_value(constraint)
+            steps.append(
+                _step_case(
+                    f"{field} violates documented value constraint",
+                    _dependency_request_line(
+                        field, json.dumps(invalid, ensure_ascii=False)
+                    ),
+                    _required_parameter_error_code(expected_error),
+                    _json_block(expected_error["response_json"]),
+                )
+            )
+
+        case = _parameter_case(
+            context, endpoint, contextual_parameter, reference_files
+        )
+        case.update(
+            {
+                "category": "parameter_dependency_validation",
+                "scenario": f"case：check the {field} validation when {condition_text}",
+                "parameter": field,
+                "dependency_rule_id": str(rule.get("rule_id", "")),
+                "dependency_case_kind": case_kind,
+                "dependency_context": condition,
+                "dependency_mutation": {
+                    "operation": "apply_existing_parameter_validation",
+                    "field": field,
+                    "field_state": state,
+                },
+                "steps": steps,
+                "expected_error": expected_error,
+                "tags": ["parameter_dependency", case_kind],
+                "priority": "P1",
+                "source_reference": {
+                    "generated_by": DEPENDENCY_GENERATED_BY,
+                    "vendor_doc": [str(endpoint.get("endpoint", ""))],
+                    "dependency_rule_id": str(rule.get("rule_id", "")),
+                    "source_evidence": rule.get("source_evidence", {}),
+                    "xmind_reference_cases": reference_files,
+                },
+            }
+        )
+        case["remarks"] += (
+            f"\nDependency rule: {rule.get('rule_id', '')}; "
+            f"{condition_text} => {state}."
+        )
+        output.append(case)
+    return output
+
+
+def _dependency_condition_text(condition: dict[str, Any]) -> str:
+    field = str(condition.get("field", ""))
+    operator = str(condition.get("operator", ""))
+    if operator == "eq":
+        return f"{field}={condition.get('value')}"
+    if operator == "in":
+        return f"{field} in [{', '.join(str(v) for v in condition.get('values', []))}]"
+    if operator == "otherwise":
+        return f"{field}=otherwise"
+    return f"{field} {operator}".strip()
+
+
+def _dependency_normal_request_value(endpoint: dict[str, Any], field: str) -> str:
+    parameter = next(
+        (
+            item
+            for item in _expanded_request_parameters(endpoint)
+            if canonical_parameter_path(item.get("name", ""))
+            == canonical_parameter_path(field)
+        ),
+        {"name": field},
+    )
+    value = _find_example_value(
+        endpoint.get("request_example"), str(parameter.get("name", field))
+    )
+    if value is not None:
+        return json.dumps(value, ensure_ascii=False)
+    if _is_object_parameter(parameter):
+        payload: dict[str, Any] = {}
+        prefix = canonical_parameter_path(field) + "."
+        for child in endpoint.get("request_parameters", []):
+            child_path = canonical_parameter_path(child.get("name", ""))
+            if not child_path.startswith(prefix):
+                continue
+            relative = child_path[len(prefix):].split(".")
+            raw_value = (
+                '"EUR"'
+                if _dependency_leaf_name(child_path) == "currency"
+                else _sample_value(child)
+            )
+            try:
+                child_value = json.loads(raw_value)
+            except json.JSONDecodeError:
+                child_value = raw_value.strip('"')
+            _set_nested_value(payload, relative, child_value)
+        return json.dumps(payload or {}, ensure_ascii=False)
+    if _dependency_leaf_name(field) == "currency":
+        return '"EUR"'
+    return _sample_value(parameter)
+
+
+def _set_nested_value(payload: dict[str, Any], path: list[str], value: Any) -> None:
+    current = payload
+    for part in path[:-1]:
+        current = current.setdefault(part, {})
+    if path:
+        current[path[-1]] = value
+
+
+def _dependency_request_line(
+    field: str, value_json: str, commented: bool = False
+) -> str:
+    parts = canonical_parameter_path(field).split(".")
+    try:
+        value: Any = json.loads(value_json)
+    except json.JSONDecodeError:
+        value = value_json.strip('"')
+    nested = value
+    for part in reversed(parts[1:]):
+        nested = {part: nested}
+    prefix = "// " if commented else ""
+    return f'{prefix}"{parts[0]}": {json.dumps(nested, ensure_ascii=False)}'
+
+
+def _format_dependency_step_payload(
+    step: dict[str, str], field: str
+) -> dict[str, str]:
+    formatted = dict(step)
+    text = str(formatted.get("step", ""))
+    title, separator, request_line = text.partition("\n")
+    if not separator:
+        return formatted
+    match = re.match(r'(?s)^(//\s*)?"[^"]+"\s*:\s*(.+)$', request_line.strip())
+    if not match:
+        return formatted
+    formatted["step"] = (
+        title.replace("/", ".")
+        + "\n"
+        + _dependency_request_line(
+            field, match.group(2), commented=bool(match.group(1))
+        )
+    )
+    return formatted
+
+
+def _dependency_leaf_name(value: str) -> str:
+    path = canonical_parameter_path(value)
+    return path.rsplit(".", 1)[-1].lower()
+
+
+def _invalid_constraint_value(constraint: dict[str, Any]) -> Any:
+    operator = str(constraint.get("operator", ""))
+    value = constraint.get("value")
+    if operator == "=":
+        if isinstance(value, bool):
+            return not value
+        if isinstance(value, (int, float)):
+            return value + 1
+        return f"invalid-{value}"
+    if operator in {">", ">="} and isinstance(value, (int, float)):
+        return value - 1 if operator == ">=" else value
+    if operator in {"<", "<="} and isinstance(value, (int, float)):
+        return value + 1 if operator == "<=" else value
+    return "invalid"
 
 
 def _vendor_test_scenario_cases(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -954,6 +1208,7 @@ def _parameter_steps(
 ) -> list[dict[str, str]]:
     parameter_name = str(parameter.get("name", "parameter"))
     lowered = parameter_name.lower()
+    leaf_name = _dependency_leaf_name(parameter_name)
     code = _required_parameter_error_code(expected_error)
     error_response = _json_block(_expected_error_response(context, endpoint, expected_error))
     steps: list[dict[str, str]] = []
@@ -973,7 +1228,7 @@ def _parameter_steps(
     if lowered in {"hmac", "hash"}:
         return _hash_parameter_steps(endpoint, parameter, code, error_response)
 
-    if "amount" in lowered:
+    if "amount" in leaf_name:
         steps = [
             _step_case(
                 f"{parameter_name} doesn't set",
@@ -1045,7 +1300,7 @@ def _parameter_steps(
         )
     )
 
-    if lowered == "currency":
+    if leaf_name == "currency":
         steps.append(
             _step_case_for_error(
                 f"{parameter_name} Input invalid currency",
@@ -1169,11 +1424,12 @@ def _optional_parameter_steps(
 ) -> list[dict[str, str]]:
     parameter_name = str(parameter.get("name", "parameter"))
     lowered = parameter_name.lower()
+    leaf_name = _dependency_leaf_name(parameter_name)
     if _is_array_parameter(parameter):
         specs = _array_parameter_step_specs(endpoint, parameter)
     elif _is_object_parameter(parameter):
         return _optional_object_parameter_steps(context, endpoint, parameter)
-    elif "amount" in lowered:
+    elif "amount" in leaf_name:
         success_response = _json_block(_success_response(endpoint))
         steps = [
             _success_step_case(
@@ -1436,6 +1692,10 @@ def _normal_request_value(endpoint: dict[str, Any], parameter: dict[str, Any]) -
     value = _find_example_value(example, name)
     if value is not None:
         return json.dumps(value, ensure_ascii=False)
+    if _dependency_leaf_name(name) == "currency":
+        return '"EUR"'
+    if _is_object_parameter(parameter):
+        return _dependency_normal_request_value(endpoint, name)
     return _sample_value(parameter)
 
 

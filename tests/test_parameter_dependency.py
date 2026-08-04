@@ -1,0 +1,395 @@
+from __future__ import annotations
+
+import unittest
+
+from doc_reader.parameter_dependency import compile_parameter_dependencies
+from generator.test_case_generator import _parameter_validation_cases
+
+
+class ParameterDependencyCompilerTests(unittest.TestCase):
+    def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
+        endpoints = [
+            {
+                "endpoint": "/v1/cancel",
+                "section": "Cancel",
+                "request_parameters": [
+                    {"name": "mode", "type": "String", "required": "Y"},
+                    {
+                        "name": "referenceId",
+                        "type": "String",
+                        "required": "Y/N",
+                        "remark": (
+                            "Dependency: when mode in [A,B] => Y; "
+                            "when mode = C => N(omit); error=BAD_REQUEST"
+                        ),
+                    },
+                ],
+            }
+        ]
+        profile, report = compile_parameter_dependencies(
+            endpoints, [{"code": "BAD_REQUEST", "context": "invalid request"}]
+        )
+        self.assertTrue(report["valid"])
+        self.assertTrue(endpoints[0]["parameter_dependency"])
+        self.assertEqual(profile["endpoints"][0]["selectors"], ["mode"])
+        self.assertEqual(len(profile["endpoints"][0]["rules"]), 2)
+        self.assertEqual(profile["endpoints"][0]["rules"][1]["field_state"], "forbidden")
+
+    def test_invalid_selector_fails_closed_for_endpoint(self) -> None:
+        endpoints = [
+            {
+                "endpoint": "/v1/test",
+                "request_parameters": [
+                    {
+                        "name": "value",
+                        "required": "Y/N",
+                        "remark": "Dependency: when missing = A => Y; otherwise => N(optional); error=BAD_REQUEST",
+                    }
+                ],
+            }
+        ]
+        profile, report = compile_parameter_dependencies(endpoints, [{"code": "BAD_REQUEST"}])
+        self.assertFalse(report["valid"])
+        self.assertFalse(profile["endpoints"][0]["enabled"])
+        self.assertEqual(profile["endpoints"][0]["rules"], [])
+
+    def test_requires_explicit_error_code(self) -> None:
+        endpoints = [
+            {
+                "endpoint": "/v1/test",
+                "request_parameters": [
+                    {"name": "kind", "required": "Y"},
+                    {
+                        "name": "value",
+                        "required": "Y/N",
+                        "remark": "Dependency: when kind = A => Y; otherwise => N(omit)",
+                    },
+                ],
+            }
+        ]
+        _, report = compile_parameter_dependencies(endpoints, [{"code": "BAD_REQUEST"}])
+        self.assertFalse(report["valid"])
+        self.assertIn("error=<ERROR_CODE>", report["errors"][0]["message"])
+
+    def test_compiles_human_required_optional_blocks(self) -> None:
+        endpoints = [
+            {
+                "endpoint": "/v1/win",
+                "request_parameters": [
+                    {"name": "winType", "required": "Y"},
+                    {
+                        "name": "rewardId",
+                        "required": "Y/N",
+                        "remark": (
+                            "Required when:\n"
+                            "winType = WIN_FREE\n"
+                            "Optional when:\n"
+                            "winType = WIN_ORDINARY\n"
+                            "winType = WIN_JACKPOT"
+                        ),
+                    },
+                ],
+            }
+        ]
+        profile, report = compile_parameter_dependencies(
+            endpoints, [{"code": "BAD_REQUEST"}]
+        )
+        endpoint = profile["endpoints"][0]
+        self.assertTrue(report["valid"])
+        self.assertTrue(endpoint["enabled"])
+        self.assertEqual(len(endpoint["rules"]), 3)
+        self.assertEqual(
+            [rule["field_state"] for rule in endpoint["rules"]],
+            ["required", "optional", "optional"],
+        )
+
+    def test_infers_unique_selector_from_documented_enum_owner(self) -> None:
+        endpoints = [
+            {
+                "endpoint": "/v1/cancel",
+                "request_parameters": [
+                    {
+                        "name": "cancelType",
+                        "required": "Y",
+                        "description": (
+                            "Allowed values: CANCEL_BET, CANCEL_ROUND, CANCEL_TRANSACTION"
+                        ),
+                    },
+                    {
+                        "name": "isAdjustment",
+                        "required": "Y/N",
+                        "remark": (
+                            "Require when\nCANCEL_BET\n"
+                            "Optional when\nCANCEL_ROUND\nCANCEL_TRANSACTION"
+                        ),
+                    },
+                ],
+            }
+        ]
+        profile, report = compile_parameter_dependencies(
+            endpoints, [{"code": "BAD_REQUEST"}]
+        )
+        endpoint = profile["endpoints"][0]
+        self.assertTrue(report["valid"])
+        self.assertTrue(endpoint["enabled"])
+        self.assertEqual(endpoint["selectors"], ["cancelType"])
+        self.assertTrue(
+            all(
+                rule["selector_source"] == "unique_enum_value_owner"
+                for rule in endpoint["rules"]
+            )
+        )
+
+    def test_compiles_complete_cancel_dependency_chain_from_remarks(self) -> None:
+        endpoints = [
+            {
+                "endpoint": "/v1/cancel",
+                "request_parameters": [
+                    {
+                        "name": "cancelType",
+                        "required": "Y",
+                        "description": (
+                            "The type may be one of the following values: "
+                            "CANCEL_ROUND, CANCEL_BET, CANCEL_TRANSACTION"
+                        ),
+                    },
+                    {
+                        "name": "refTransactionId",
+                        "required": "Y/N",
+                        "remark": (
+                            "Required when:\nCANCEL_BET\nCANCEL_TRANSACTION\n"
+                            "Optional when:\nCANCEL_ROUND"
+                        ),
+                    },
+                    {
+                        "name": "adjustmentRefund",
+                        "required": "Y/N",
+                        "remark": (
+                            "Require when:\nisAdjustment = true\n"
+                            "Optional when:\nisAdjustment = false"
+                        ),
+                    },
+                    {
+                        "name": "adjustmentRefund/amount",
+                        "required": "Y/N",
+                        "remark": (
+                            "Require when:\nisAdjustment = true\n"
+                            "Optional when:\nisAdjustment = false"
+                        ),
+                    },
+                    {
+                        "name": "adjustmentRefund/currency",
+                        "required": "Y/N",
+                        "remark": (
+                            "Require when:\nisAdjustment = true\n"
+                            "Optional when:\nisAdjustment = false"
+                        ),
+                    },
+                    {
+                        "name": "isAdjustment",
+                        "required": "Y/N",
+                        "remark": (
+                            "Require when:\nCANCEL_BET\nOptional when:\n"
+                            "CANCEL_ROUND\nCANCEL_TRANSACTION"
+                        ),
+                    },
+                ],
+            }
+        ]
+        profile, report = compile_parameter_dependencies(
+            endpoints, [{"code": "BAD_REQUEST"}]
+        )
+        endpoint = profile["endpoints"][0]
+        self.assertTrue(report["valid"])
+        self.assertTrue(endpoint["enabled"])
+        self.assertEqual(endpoint["selectors"], ["cancelType", "isAdjustment"])
+        self.assertEqual(
+            endpoint["affected_parameters"],
+            [
+                "adjustmentRefund",
+                "adjustmentRefund.amount",
+                "adjustmentRefund.currency",
+                "isAdjustment",
+                "refTransactionId",
+            ],
+        )
+        rules_by_field = {}
+        for rule in endpoint["rules"]:
+            rules_by_field.setdefault(rule["affected_field"], []).append(rule)
+        self.assertEqual(len(rules_by_field["refTransactionId"]), 3)
+        self.assertEqual(len(rules_by_field["isAdjustment"]), 3)
+        for field in (
+            "adjustmentRefund",
+            "adjustmentRefund.amount",
+            "adjustmentRefund.currency",
+        ):
+            self.assertEqual(
+                [rule["when"]["field"] for rule in rules_by_field[field]],
+                ["isAdjustment", "isAdjustment"],
+            )
+            self.assertEqual(
+                [rule["field_state"] for rule in rules_by_field[field]],
+                ["required", "optional"],
+            )
+
+
+class ParameterDependencyGeneratorTests(unittest.TestCase):
+    def test_affected_parameter_uses_dependency_cases_and_unaffected_stays_standard(self) -> None:
+        endpoint = {
+            "endpoint": "/v1/cancel",
+            "role": "cancel_bet",
+            "request_parameters": [
+                {"name": "mode", "type": "String", "required": "Y"},
+                {"name": "referenceId", "type": "String", "required": "Y/N"},
+            ],
+            "request_example": {"mode": "A", "referenceId": "ref-1"},
+            "success_response_example": {"error": "OK"},
+            "error_response_example": {"error": "BAD_REQUEST"},
+            "parameter_dependency": True,
+            "dependency_affected_parameters": ["referenceId"],
+            "parameter_dependencies": [
+                {
+                    "rule_id": "cancel.reference.1",
+                    "when": {"field": "mode", "operator": "eq", "value": "A"},
+                    "affected_field": "referenceId",
+                    "field_state": "required",
+                    "error_code": "BAD_REQUEST",
+                },
+                {
+                    "rule_id": "cancel.reference.2",
+                    "when": {"field": "mode", "operator": "eq", "value": "C"},
+                    "affected_field": "referenceId",
+                    "field_state": "forbidden",
+                    "error_code": "BAD_REQUEST",
+                },
+            ],
+        }
+        context = {
+            "endpoint_roles": [endpoint],
+            "parameter_error": {"code": "BAD_REQUEST", "source": "documented"},
+            "case_authoring_rules": {"default_game_code": "GAME"},
+            "default_test_account": "account",
+        }
+        cases = _parameter_validation_cases(context, [])
+        standard = [case for case in cases if case["category"] == "parameter_validation"]
+        dependency = [
+            case for case in cases if case["category"] == "parameter_dependency_validation"
+        ]
+        self.assertEqual([case["parameter"] for case in standard], ["mode"])
+        self.assertEqual(len(dependency), 2)
+        self.assertEqual(
+            {case["dependency_case_kind"] for case in dependency},
+            {"required_validation", "forbidden_validation"},
+        )
+        required_case = next(
+            case for case in dependency
+            if case["dependency_case_kind"] == "required_validation"
+        )
+        self.assertEqual(
+            required_case["scenario"],
+            "case：check the referenceId validation when mode=A",
+        )
+        self.assertTrue(required_case["steps"][0]["step"].startswith("referenceId doesn't set\n"))
+        self.assertNotIn("Set dependency context", required_case["steps"][0]["step"])
+
+    def test_nested_dependency_payloads_and_type_steps_are_context_aware(self) -> None:
+        parameters = [
+            {"name": "isAdjustment", "type": "boolean", "required": "Y/N"},
+            {"name": "adjustmentRefund", "type": "object", "required": "Y/N"},
+            {"name": "adjustmentRefund/amount", "type": "decimal", "required": "Y/N"},
+            {"name": "adjustmentRefund/currency", "type": "string", "required": "Y/N"},
+        ]
+        rules = []
+        for field in (
+            "adjustmentRefund",
+            "adjustmentRefund.amount",
+            "adjustmentRefund.currency",
+        ):
+            for index, (value, state) in enumerate(
+                (("true", "required"), ("false", "optional")), start=1
+            ):
+                rules.append(
+                    {
+                        "rule_id": f"cancel.{field}.{index}",
+                        "when": {
+                            "field": "isAdjustment",
+                            "operator": "eq",
+                            "value": value,
+                        },
+                        "affected_field": field,
+                        "field_state": state,
+                        "error_code": "BAD_REQUEST",
+                    }
+                )
+        endpoint = {
+            "endpoint": "/v1/cancel",
+            "role": "cancel_bet",
+            "request_parameters": parameters,
+            "request_example": {"isAdjustment": True},
+            "success_response_example": {"status": "OK"},
+            "error_response_example": {"error": "BAD_REQUEST"},
+            "parameter_dependency": True,
+            "dependency_affected_parameters": [
+                "adjustmentRefund",
+                "adjustmentRefund.amount",
+                "adjustmentRefund.currency",
+            ],
+            "parameter_dependencies": rules,
+        }
+        context = {
+            "endpoint_roles": [endpoint],
+            "parameter_error": {"code": "BAD_REQUEST", "source": "documented"},
+            "case_authoring_rules": {"default_game_code": "GAME"},
+            "default_test_account": "account",
+        }
+        cases = _parameter_validation_cases(context, [])
+        dependency = [
+            case for case in cases if case["category"] == "parameter_dependency_validation"
+        ]
+
+        optional_parent = next(
+            case
+            for case in dependency
+            if case["parameter"] == "adjustmentRefund"
+            and case["dependency_case_kind"] == "optional_validation"
+        )
+        self.assertGreaterEqual(len(optional_parent["steps"]), 2)
+        self.assertIn(
+            '"adjustmentRefund": {"amount": 100.0, "currency": "EUR"}',
+            optional_parent["steps"][0]["step"],
+        )
+
+        for field in ("adjustmentRefund.amount", "adjustmentRefund.currency"):
+            contextual = [
+                case
+                for case in dependency
+                if case["parameter"] == field
+            ]
+            self.assertEqual(len(contextual), 2)
+            self.assertEqual(
+                {case["dependency_case_kind"] for case in contextual},
+                {"required_validation", "optional_validation"},
+            )
+            all_step_text = "\n".join(
+                step["step"] for case in contextual for step in case["steps"]
+            )
+            self.assertNotIn("adjustmentRefund/", all_step_text)
+            self.assertIn('"adjustmentRefund": {', all_step_text)
+            self.assertNotIn("Set dependency context", all_step_text)
+
+        currency_contextual = [
+            case
+            for case in dependency
+            if case["parameter"] == "adjustmentRefund.currency"
+        ]
+        currency_steps = "\n".join(
+            step["step"] for case in currency_contextual for step in case["steps"]
+        )
+        self.assertIn("Input invalid currency", currency_steps)
+        self.assertFalse(
+            any("(intrinsic validation)" in case["scenario"] for case in dependency)
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
