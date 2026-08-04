@@ -954,7 +954,7 @@ def _parameter_steps(
 ) -> list[dict[str, str]]:
     parameter_name = str(parameter.get("name", "parameter"))
     lowered = parameter_name.lower()
-    code = expected_error.get("code", "UNKNOWN_PARAMETER_ERROR")
+    code = _required_parameter_error_code(expected_error)
     error_response = _json_block(_expected_error_response(context, endpoint, expected_error))
     steps: list[dict[str, str]] = []
 
@@ -966,6 +966,9 @@ def _parameter_steps(
 
     if _is_array_parameter(parameter):
         return _array_parameter_steps(endpoint, parameter, code, error_response)
+
+    if _is_object_parameter(parameter):
+        return _object_parameter_steps(endpoint, parameter, code, error_response)
 
     if lowered in {"hmac", "hash"}:
         return _hash_parameter_steps(endpoint, parameter, code, error_response)
@@ -1168,6 +1171,8 @@ def _optional_parameter_steps(
     lowered = parameter_name.lower()
     if _is_array_parameter(parameter):
         specs = _array_parameter_step_specs(endpoint, parameter)
+    elif _is_object_parameter(parameter):
+        return _optional_object_parameter_steps(context, endpoint, parameter)
     elif "amount" in lowered:
         success_response = _json_block(_success_response(endpoint))
         steps = [
@@ -1242,6 +1247,93 @@ def _array_parameter_steps(
     ]
 
 
+def _object_parameter_steps(
+    endpoint: dict[str, Any],
+    parameter: dict[str, Any],
+    expected_code: str,
+    error_response: str,
+) -> list[dict[str, str]]:
+    return [
+        _step_case(title, request_line, expected_code, error_response)
+        for title, request_line in _object_parameter_step_specs(endpoint, parameter)
+    ]
+
+
+def _optional_object_parameter_steps(
+    context: dict[str, Any], endpoint: dict[str, Any], parameter: dict[str, Any]
+) -> list[dict[str, str]]:
+    specs = _object_parameter_step_specs(endpoint, parameter)
+    success_response = _json_block(_success_response(endpoint))
+    steps = [_success_step_case(*specs[0], success_response)]
+    expected_error = context.get("parameter_error", {})
+    expected_code = _required_parameter_error_code(expected_error)
+    error_response = _json_block(_expected_error_response(context, endpoint, expected_error))
+    steps.extend(
+        _step_case(title, request_line, expected_code, error_response)
+        for title, request_line in specs[1:]
+    )
+    return steps
+
+
+def _object_parameter_step_specs(
+    endpoint: dict[str, Any], parameter: dict[str, Any]
+) -> list[tuple[str, str]]:
+    name = str(parameter.get("name", "parameter"))
+    normal = _normal_request_value(endpoint, parameter)
+    cases = [
+        (f"{name} doesn't set", f'// "{name}": {normal}'),
+        (f"{name} input null", f'"{name}": null'),
+        (f"{name} input empty object", f'"{name}": {{}}'),
+        (f"{name} input array instead of object", f'"{name}": []'),
+        (f"{name} input string instead of object", f'"{name}": "test"'),
+        (f"{name} input number instead of object", f'"{name}": 123'),
+    ]
+    for child_name, payload in _object_payloads_missing_required_children(
+        endpoint, parameter
+    ):
+        cases.append(
+            (
+                f"{name} object missing required field {child_name}",
+                f'"{name}": {json.dumps(payload, ensure_ascii=False)}',
+            )
+        )
+    return cases
+
+
+def _object_payloads_missing_required_children(
+    endpoint: dict[str, Any], parameter: dict[str, Any]
+) -> list[tuple[str, dict[str, Any]]]:
+    parent_name = str(parameter.get("name", "")).strip()
+    example = _find_example_value(endpoint.get("request_example"), parent_name)
+    if not parent_name or not isinstance(example, dict):
+        return []
+    prefix = f"{parent_name}/"
+    output = []
+    for child in endpoint.get("request_parameters", []):
+        child_name = str(child.get("name", "")).strip()
+        if not child_name.startswith(prefix) or not _is_required_parameter(child):
+            continue
+        relative_path = [part for part in child_name[len(prefix):].split("/") if part]
+        payload = deepcopy(example)
+        if _remove_object_path(payload, relative_path):
+            output.append(("/".join(relative_path), payload))
+    return output
+
+
+def _remove_object_path(payload: dict[str, Any], path: list[str]) -> bool:
+    if not path:
+        return False
+    current: Any = payload
+    for part in path[:-1]:
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    if not isinstance(current, dict) or path[-1] not in current:
+        return False
+    del current[path[-1]]
+    return True
+
+
 def _array_parameter_step_specs(
     endpoint: dict[str, Any],
     parameter: dict[str, Any],
@@ -1298,17 +1390,10 @@ def _step_case(
 ) -> dict[str, str]:
     response = str(error_response).strip()
     response_text = f"\n{response}" if response and response != "{}" else ""
-    if expected_code == "UNKNOWN_PARAMETER_ERROR":
-        expected = (
-            "The API returns a parameter validation failure. "
-            "The exact parameter error code is not documented in the vendor doc."
-            f"{response_text}"
-        )
-    else:
-        expected = (
-            f"The API returns a parameter validation error with error code {expected_code}."
-            f"{response_text}"
-        )
+    expected = (
+        f"The API returns a parameter validation error with error code {expected_code}."
+        f"{response_text}"
+    )
     return {
         "step": f"{title}\n{request_line}",
         "expected": expected,
@@ -1322,13 +1407,20 @@ def _step_case_for_error(
     endpoint: dict[str, Any],
     expected_error: dict[str, Any],
 ) -> dict[str, str]:
-    code = str(expected_error.get("code", "")).strip() or "UNKNOWN_PARAMETER_ERROR"
+    code = _required_parameter_error_code(expected_error)
     return _step_case(
         title,
         request_line,
         code,
         _json_block(_expected_error_response(context, endpoint, expected_error)),
     )
+
+
+def _required_parameter_error_code(expected_error: dict[str, Any]) -> str:
+    code = str(expected_error.get("code", "")).strip()
+    if not code:
+        raise ValueError("A documented parameter validation error code is required.")
+    return code
 
 
 def _success_step_case(title: str, request_line: str, success_response: str) -> dict[str, str]:
@@ -1521,9 +1613,19 @@ def _is_array_parameter(parameter: dict[str, Any]) -> bool:
     return "array" in param_type or "list" in param_type
 
 
+def _is_object_parameter(parameter: dict[str, Any]) -> bool:
+    param_type = str(parameter.get("type", "")).lower()
+    return any(token in param_type for token in ("object", "dict", "map"))
+
+
 def _is_optional_parameter(parameter: dict[str, Any]) -> bool:
     required = str(parameter.get("required", "")).strip().upper()
     return required in {"N", "NO", "FALSE", "0", "OPTIONAL"} or required.startswith("N ")
+
+
+def _is_required_parameter(parameter: dict[str, Any]) -> bool:
+    required = str(parameter.get("required", "")).strip().upper()
+    return required in {"Y", "YES", "TRUE", "1", "REQUIRED"} or required.startswith("Y ")
 
 
 def _is_string_type(param_type: str) -> bool:

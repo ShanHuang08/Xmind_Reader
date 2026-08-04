@@ -318,6 +318,10 @@ def _examples_from_code_block(block: str) -> list[Any]:
 
 def _json_examples_from_code_block(block: str) -> list[Any]:
     text = str(block or "").strip()
+    # Documentation examples commonly contain JSON-style trailing commas.
+    # Remove only commas immediately followed by a closing object/array token
+    # so the complete example is parsed instead of a valid nested fragment.
+    text = re.sub(r",(?=\s*[}\]])", "", text)
     start = text.find("{")
     if start < 0:
         return []
@@ -497,9 +501,13 @@ def _extract_error_codes(parsed: dict[str, Any], text: str) -> list[dict[str, st
 
 def _normalize_error_header(value: str) -> str:
     normalized = _normalize_header(value)
+    # Confluence exports may append a translated header in parentheses, for
+    # example "Error ID (錯誤代碼)" or "Description (說明)".
+    normalized = re.sub(r"\s*\([^)]*\)\s*", " ", normalized).strip()
     aliases = {
         "error code": "code",
         "error codes": "code",
+        "error id": "code",
         "status code": "code",
         "response code": "code",
         "message": "message",

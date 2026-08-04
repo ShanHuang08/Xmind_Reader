@@ -35,7 +35,9 @@ def build_generation_context(draft: dict[str, Any]) -> dict[str, Any]:
         "generation_mapping": draft.get("generation_mapping", {}),
         "case_authoring_rules": draft.get("case_authoring_rules", {}),
         "default_test_account": _default_test_account(draft),
-        "parameter_error": _select_parameter_error(draft.get("error_codes", [])),
+        "parameter_error": _select_parameter_error(
+            draft.get("error_codes", []), draft.get("endpoint_roles", [])
+        ),
     }
 
 
@@ -51,16 +53,20 @@ def _account_from_vendor(vendor: str, today: date | None = None) -> str:
     return f"{prefix}{current:%y%m%d}"
 
 
-def _select_parameter_error(error_codes: list[dict[str, Any]]) -> dict[str, str]:
+def _select_parameter_error(
+    error_codes: list[dict[str, Any]], endpoints: list[dict[str, Any]] | None = None
+) -> dict[str, str]:
     for item in error_codes:
         text = " ".join(str(item.get(key, "")) for key in ("code", "context", "message", "description"))
-        lowered = text.lower()
+        lowered = re.sub(r"[_-]+", " ", text.lower())
         if (
             "bad parameter" in lowered
             or "bad parameters" in lowered
+            or "bad request" in lowered
             or "invalid request" in lowered
             or "invalid parameter" in lowered
             or "invalid parameters" in lowered
+            or "parameters are missing or invalid" in lowered
         ):
             return {
                 "code": str(item.get("code", "")).strip(),
@@ -89,10 +95,35 @@ def _select_parameter_error(error_codes: list[dict[str, Any]]) -> dict[str, str]
             "description": description,
         }
 
+    endpoint_error = _parameter_error_from_endpoint_examples(endpoints or [])
+    if endpoint_error:
+        return endpoint_error
+
+    raise ValueError(
+        "No documented parameter validation error code or endpoint error response example was found."
+    )
+
+
+def _parameter_error_from_endpoint_examples(
+    endpoints: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    candidates = []
+    for endpoint in endpoints:
+        response = endpoint.get("error_response_example")
+        if not isinstance(response, dict):
+            continue
+        for key in ("error", "code", "error_code", "errorCode", "message"):
+            value = str(response.get(key, "")).strip()
+            if value and re.fullmatch(r"[A-Z][A-Z0-9_]*", value):
+                candidates.append(value)
+                break
+    if not candidates:
+        return None
+    code = "BAD_REQUEST" if "BAD_REQUEST" in candidates else candidates[0]
     return {
-        "code": "UNKNOWN_PARAMETER_ERROR",
-        "source": "inferred_from_limited_vendor_codes",
-        "description": "No documented parameter validation error code was found.",
+        "code": code,
+        "source": "documented",
+        "description": "Documented endpoint error response example.",
     }
 
 
