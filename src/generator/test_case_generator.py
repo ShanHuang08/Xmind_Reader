@@ -1144,7 +1144,20 @@ def _expected_error_for_parameter(
 ) -> dict[str, Any]:
     if parameter.get("source") == "path_parameter":
         return _path_parameter_error(context, str(parameter.get("name", "")))
+    if _is_encryption_parameter(parameter):
+        encryption_error = deepcopy(context.get("encryption_error", {}))
+        if not encryption_error:
+            raise ValueError(
+                "No documented encryption/signature validation error code was found."
+            )
+        return encryption_error
     return deepcopy(context.get("parameter_error", {}))
+
+
+def _is_encryption_parameter(parameter: dict[str, Any]) -> bool:
+    text = f"{parameter.get('name', '')} {parameter.get('description', '')}".lower()
+    tokens = set(re.findall(r"[a-z]+", text))
+    return bool(tokens & {"hmac", "signature", "sign", "hash", "encrypt", "decrypt"})
 
 
 def _path_parameter_error(context: dict[str, Any], parameter_name: str) -> dict[str, Any]:
@@ -1211,6 +1224,7 @@ def _parameter_steps(
     leaf_name = _dependency_leaf_name(parameter_name)
     code = _required_parameter_error_code(expected_error)
     error_response = _json_block(_expected_error_response(context, endpoint, expected_error))
+    error_label = "encryption/signature validation" if _is_encryption_parameter(parameter) else "parameter validation"
     steps: list[dict[str, str]] = []
 
     if parameter.get("source") == "path_parameter":
@@ -1220,15 +1234,16 @@ def _parameter_steps(
         return _optional_parameter_steps(context, endpoint, parameter)
 
     if _is_array_parameter(parameter):
-        return _array_parameter_steps(endpoint, parameter, code, error_response)
+        return _array_parameter_steps(endpoint, parameter, code, error_response, error_label)
 
     if _is_object_parameter(parameter):
         return _object_parameter_steps(endpoint, parameter, code, error_response)
 
     if lowered in {"hmac", "hash"}:
-        return _hash_parameter_steps(endpoint, parameter, code, error_response)
+        return _hash_parameter_steps(endpoint, parameter, code, error_response, error_label)
 
     if "amount" in leaf_name:
+        decimal_case_title, decimal_case_request = _amount_decimal_case(endpoint, parameter)
         steps = [
             _step_case(
                 f"{parameter_name} doesn't set",
@@ -1239,19 +1254,19 @@ def _parameter_steps(
             _step_case(f"{parameter_name} Input blank", f'"{parameter_name}": ""', code, error_response),
             _step_case(
                 f"{parameter_name} Input exceed 20 digit numbers",
-                f'"{parameter_name}": 123456789012345678901',
+                _amount_request_line(parameter, "123456789012345678901"),
                 code,
                 error_response,
             ),
             _step_case(
-                f"{parameter_name} Input 9 decimal numbers",
-                f'"{parameter_name}": 100.123456789',
+                decimal_case_title,
+                decimal_case_request,
                 code,
                 error_response,
             ),
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
-                f'"{parameter_name}": -100.0',
+                _amount_request_line(parameter, "-100.0"),
                 context,
                 endpoint,
                 _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
@@ -1358,6 +1373,7 @@ def _hash_parameter_steps(
     parameter: dict[str, Any],
     expected_code: str,
     error_response: str,
+    error_label: str = "parameter validation",
 ) -> list[dict[str, str]]:
     parameter_name = str(parameter.get("name", "hmac"))
     return [
@@ -1365,19 +1381,19 @@ def _hash_parameter_steps(
             f"{parameter_name} doesn't set",
             f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}',
             expected_code,
-            error_response,
+            error_response, error_label,
         ),
         _step_case(
             f"{parameter_name} leave blank",
             f'"{parameter_name}": ""',
             expected_code,
-            error_response,
+            error_response, error_label,
         ),
         _step_case(
             f"{parameter_name} input int",
             f'"{parameter_name}": 123',
             expected_code,
-            error_response,
+            error_response, error_label,
         ),
     ]
 
@@ -1430,6 +1446,7 @@ def _optional_parameter_steps(
     elif _is_object_parameter(parameter):
         return _optional_object_parameter_steps(context, endpoint, parameter)
     elif "amount" in leaf_name:
+        decimal_case_title, decimal_case_request = _amount_decimal_case(endpoint, parameter)
         success_response = _json_block(_success_response(endpoint))
         steps = [
             _success_step_case(
@@ -1440,17 +1457,17 @@ def _optional_parameter_steps(
             _success_step_case(f"{parameter_name} Input blank", f'"{parameter_name}": ""', success_response),
             _success_step_case(
                 f"{parameter_name} Input exceed 20 digit numbers",
-                f'"{parameter_name}": 123456789012345678901',
+                _amount_request_line(parameter, "123456789012345678901"),
                 success_response,
             ),
             _success_step_case(
-                f"{parameter_name} Input 9 decimal numbers",
-                f'"{parameter_name}": 100.123456789',
+                decimal_case_title,
+                decimal_case_request,
                 success_response,
             ),
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
-                f'"{parameter_name}": -100.0',
+                _amount_request_line(parameter, "-100.0"),
                 context,
                 endpoint,
                 _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
@@ -1491,14 +1508,92 @@ def _optional_amount_missing_request_line(parameter: dict[str, Any]) -> str:
     return f'"{name}": 0'
 
 
+def _amount_decimal_case(endpoint: dict[str, Any], parameter: dict[str, Any]) -> tuple[str, str]:
+    name = str(parameter.get("name", "amount"))
+    max_decimals = _infer_amount_decimal_places(endpoint, parameter)
+    invalid_decimals = max_decimals + 1 if max_decimals is not None else 9
+    value = "100." + "".join(str((index % 9) + 1) for index in range(invalid_decimals))
+    return f"{name} Input {invalid_decimals} decimal numbers", _amount_request_line(parameter, value)
+
+
+def _amount_request_line(parameter: dict[str, Any], value: str) -> str:
+    name = str(parameter.get("name", "amount"))
+    return f'"{name}": {_format_amount_value(parameter, value)}'
+
+
+def _format_amount_value(parameter: dict[str, Any], value: str) -> str:
+    parameter_type = str(parameter.get("type", "")).lower()
+    return json.dumps(value) if _is_string_type(parameter_type) or "numeric string" in parameter_type else value
+
+
+def _infer_amount_decimal_places(endpoint: dict[str, Any], parameter: dict[str, Any]) -> int | None:
+    explicit = _explicit_decimal_places_from_text(_amount_precision_text(endpoint, parameter))
+    return explicit if explicit is not None else _decimal_places_from_examples(endpoint)
+
+
+def _amount_precision_text(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
+    pieces = []
+    for item in [parameter, *endpoint.get("request_parameters", []), *endpoint.get("response_parameters", [])]:
+        if not isinstance(item, dict):
+            continue
+        item_text = " ".join(str(item.get(field, "")) for field in ("name", "type", "description", "remark", "mapping"))
+        if "amount" in item_text.lower() or "balance" in item_text.lower():
+            pieces.append(item_text)
+    return " ".join(pieces)
+
+
+def _explicit_decimal_places_from_text(text: str) -> int | None:
+    normalized = " ".join(text.lower().split())
+    patterns = (
+        r"(?:must\s+always\s+have|always\s+have|has|with|up\s+to|maximum(?:\s+of)?|max(?:imum)?)\s+(\d+)\s+(?:digits?\s+after\s+(?:the\s+)?decimal|decimal\s+places?)",
+        r"(\d+)\s+(?:digits?\s+after\s+(?:the\s+)?decimal|decimal\s+places?)",
+        r"(?:scale|precision)\s*[:=]?\s*(\d+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _decimal_places_from_examples(endpoint: dict[str, Any]) -> int | None:
+    counts = []
+    for key in ("request_example", "success_response_example", "error_response_example"):
+        example = endpoint.get(key)
+        if isinstance(example, (dict, list)):
+            counts.extend(_amount_decimal_counts(example))
+    return max(counts) if counts else None
+
+
+def _amount_decimal_counts(value: Any) -> list[int]:
+    counts = []
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if "amount" in str(key).lower() or "balance" in str(key).lower():
+                count = _decimal_count(nested)
+                if count is not None:
+                    counts.append(count)
+            counts.extend(_amount_decimal_counts(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            counts.extend(_amount_decimal_counts(nested))
+    return counts
+
+
+def _decimal_count(value: Any) -> int | None:
+    match = re.fullmatch(r"-?\d+\.(\d+)", str(value))
+    return len(match.group(1)) if match else None
+
+
 def _array_parameter_steps(
     endpoint: dict[str, Any],
     parameter: dict[str, Any],
     expected_code: str,
     error_response: str,
+    error_label: str = "parameter validation",
 ) -> list[dict[str, str]]:
     return [
-        _step_case(title, request_line, expected_code, error_response)
+        _step_case(title, request_line, expected_code, error_response, error_label)
         for title, request_line in _array_parameter_step_specs(endpoint, parameter)
     ]
 
@@ -1642,12 +1737,13 @@ def _first_required_array_item_field(
 
 
 def _step_case(
-    title: str, request_line: str, expected_code: str, error_response: str
+    title: str, request_line: str, expected_code: str, error_response: str,
+    error_label: str = "parameter validation",
 ) -> dict[str, str]:
     response = str(error_response).strip()
     response_text = f"\n{response}" if response and response != "{}" else ""
     expected = (
-        f"The API returns a parameter validation error with error code {expected_code}."
+        f"The API returns a {error_label} error with error code {expected_code}."
         f"{response_text}"
     )
     return {

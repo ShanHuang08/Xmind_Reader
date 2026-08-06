@@ -42,6 +42,7 @@ def build_generation_context(draft: dict[str, Any]) -> dict[str, Any]:
         "parameter_error": _select_parameter_error(
             draft.get("error_codes", []), draft.get("endpoint_roles", [])
         ),
+        "encryption_error": _select_encryption_error(draft.get("error_codes", [])),
     }
 
 
@@ -106,6 +107,26 @@ def _select_parameter_error(
     raise ValueError(
         "No documented parameter validation error code or endpoint error response example was found."
     )
+
+
+def _select_encryption_error(error_codes: list[dict[str, Any]]) -> dict[str, str]:
+    """Select a documented error specifically for signature/encryption checks.
+
+    An empty result is intentional: generators must fail closed rather than
+    inventing an error code when the vendor document does not define one.
+    """
+    keywords = (
+        "invalid signature", "wrong signature", "invalid hmac", "wrong hmac",
+        "wrong hash", "invalid hash", "authorization hash", "signature", "hmac",
+        "hash", "encrypt", "decrypt",
+    )
+    for item in error_codes:
+        code = str(item.get("code", "")).strip()
+        description = str(item.get("context") or item.get("message") or item.get("description") or "").strip()
+        text = f"{code} {description}".lower().replace("_", " ")
+        if code and any(keyword in text for keyword in keywords):
+            return {"code": code, "source": "documented", "description": description}
+    return {}
 
 
 def _parameter_error_from_endpoint_examples(
