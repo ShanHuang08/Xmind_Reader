@@ -44,10 +44,15 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
     text = parsed.get("plain_text", "")
     sections = _sections(parsed.get("paragraphs", []))
     endpoints = _extract_endpoints(parsed, sections)
+    operation_variants = _endpoint_operation_variants(parsed)
     error_codes = _extract_error_codes(parsed, text)
     dependency_profile, dependency_report = compile_parameter_dependencies(endpoints, error_codes)
     endpoint_examples = _endpoint_json_examples(sections, vendor_name)
     for endpoint in endpoints:
+        _attach_operation_variants(
+            endpoint,
+            operation_variants.get(endpoint.get("endpoint", ""), []),
+        )
         _attach_endpoint_examples(endpoint, error_codes, endpoint_examples.get(endpoint.get("endpoint", ""), {}))
     checklist = _extract_vendor_master_checklist(parsed)
     game_codes = _extract_game_codes(parsed)
@@ -203,6 +208,200 @@ def _attach_endpoint_examples(
         value = source_examples.get(key)
         if value:
             endpoint[key] = deepcopy(value)
+
+
+def _attach_operation_variants(
+    endpoint: dict[str, Any], variants: list[dict[str, Any]]
+) -> None:
+    if not _requires_operation_variants(variants):
+        return
+    endpoint["operation_variants"] = variants
+
+
+def _requires_operation_variants(variants: list[dict[str, Any]]) -> bool:
+    if len(variants) > 1:
+        return True
+    if len(variants) != 1:
+        return False
+    return len(variants[0].get("request_examples", [])) > 1
+
+
+def _endpoint_operation_variants(parsed: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    paragraphs = parsed.get("paragraphs", [])
+    parameter_tables = [
+        table for table in parsed.get("tables", []) if _is_parameter_table(table)
+    ]
+    table_cursor = 0
+    output: dict[str, list[dict[str, Any]]] = {}
+    current: dict[str, Any] | None = None
+    current_label = ""
+
+    def flush() -> None:
+        nonlocal current, table_cursor
+        if not current:
+            return
+        request_parameters: list[dict[str, str]] = []
+        response_parameters: list[dict[str, str]] = []
+        if "request" in current.get("sections", {}) and table_cursor < len(parameter_tables):
+            request_parameters = _parameter_rows(parameter_tables[table_cursor])
+            table_cursor += 1
+        if "response" in current.get("sections", {}) and table_cursor < len(parameter_tables):
+            response_parameters = _parameter_rows(parameter_tables[table_cursor])
+            table_cursor += 1
+        variant = _operation_variant_from_block(
+            current,
+            request_parameters,
+            response_parameters,
+        )
+        if variant:
+            output.setdefault(variant["endpoint"], []).append(variant)
+        current = None
+
+    for paragraph in paragraphs:
+        style = str(paragraph.get("style", "")).lower()
+        text = str(paragraph.get("text", ""))
+        if _is_endpoint_operation_heading(style, text):
+            flush()
+            current = {
+                "title": text,
+                "endpoint": _endpoint_from_section_title(text),
+                "method": _method_from_heading(text),
+                "operation": _operation_from_heading(text),
+                "sections": {},
+            }
+            current_label = ""
+            continue
+        if not current:
+            continue
+        if style in {"h1", "h2", "h3"} or style.startswith("heading 3"):
+            flush()
+            current_label = ""
+            continue
+        if style in {"h4", "h5", "h6"} or style.startswith("heading 4"):
+            current_label = text.strip().lower()
+            current["sections"].setdefault(current_label, [])
+            continue
+        if current_label:
+            current["sections"].setdefault(current_label, []).append(text)
+    flush()
+    return output
+
+
+def _is_endpoint_operation_heading(style: str, text: str) -> bool:
+    return (
+        (style in {"h3", "heading 3"} or style.startswith("heading 3"))
+        and bool(_endpoint_from_section_title(text))
+    )
+
+
+def _operation_variant_from_block(
+    block: dict[str, Any],
+    request_parameters: list[dict[str, str]],
+    response_parameters: list[dict[str, str]],
+) -> dict[str, Any]:
+    sections = block.get("sections", {})
+    request_examples = _json_examples_from_sections(
+        sections,
+        labels=("example request", "request example"),
+        response_mode=False,
+    )
+    success_examples = _json_examples_from_sections(
+        sections,
+        labels=("example response", "response example"),
+        response_mode=True,
+    )
+    error_examples = _json_examples_from_sections(
+        sections,
+        labels=("example error response", "error response example"),
+        response_mode=True,
+    )
+    variant = {
+        "endpoint": block.get("endpoint", ""),
+        "method": block.get("method", ""),
+        "operation": block.get("operation", ""),
+        "title": block.get("title", ""),
+        "request_parameters": request_parameters,
+        "response_parameters": response_parameters,
+        "request_examples": _label_request_examples(request_examples),
+        "success_response_examples": success_examples,
+        "error_response_examples": error_examples,
+    }
+    if request_examples:
+        variant["request_example"] = request_examples[0]
+    if success_examples:
+        variant["success_response_example"] = success_examples[0]
+    if error_examples:
+        variant["error_response_example"] = error_examples[0]
+    return {key: value for key, value in variant.items() if value not in ("", [], {})}
+
+
+def _json_examples_from_sections(
+    sections: dict[str, list[str]],
+    labels: tuple[str, ...],
+    response_mode: bool,
+) -> list[Any]:
+    examples: list[Any] = []
+    for label, content in sections.items():
+        normalized = label.strip().lower()
+        if normalized not in labels:
+            continue
+        for item in content:
+            for parsed in _json_objects_from_text(item):
+                if response_mode or not _looks_like_response_example(parsed):
+                    examples.append(parsed)
+    return examples
+
+
+def _json_objects_from_text(text: str) -> list[Any]:
+    decoder = json.JSONDecoder()
+    source = str(text or "")
+    objects: list[Any] = []
+    index = 0
+    while index < len(source):
+        start = source.find("{", index)
+        if start < 0:
+            break
+        try:
+            parsed, end = decoder.raw_decode(source[start:])
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+        objects.append(parsed)
+        index = start + end
+    return objects
+
+
+def _label_request_examples(examples: list[Any]) -> list[dict[str, Any]]:
+    labelled = []
+    for example in examples:
+        if isinstance(example, dict):
+            labelled.append(
+                {
+                    "label": _request_example_label(example),
+                    "example": example,
+                }
+            )
+    return labelled
+
+
+def _request_example_label(example: dict[str, Any]) -> str:
+    parts = []
+    for key in ("type", "promoType", "action", "operation"):
+        value = example.get(key)
+        if value not in (None, ""):
+            parts.append(str(value))
+    return " / ".join(parts) if parts else "request"
+
+
+def _method_from_heading(text: str) -> str:
+    match = re.search(r"\b(GET|POST|PUT|PATCH|DELETE)\b", text, re.I)
+    return match.group(1).upper() if match else ""
+
+
+def _operation_from_heading(text: str) -> str:
+    if "-" not in text:
+        return ""
+    return text.rsplit("-", 1)[-1].strip()
 
 
 def _endpoint_json_examples(sections: list[dict[str, Any]], vendor_name: str = "") -> dict[str, dict[str, Any]]:
