@@ -100,6 +100,27 @@ python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate
 python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate_test_cases_copy.xmind --no-merge-key-copy
 ```
 
+### New Vendor 一次執行流程
+
+`new-vendor` command 會從 repo 內遞迴搜尋 `user_behavior_map.xmind` 與
+`Vendor_<Vendor>.doc` / `.docx`，檔名比對不分大小寫；若找到多個同名檔案，會列出路徑與建立時間讓使用者選擇。
+
+Windows：
+
+```bash
+python main.py new-vendor Veligames
+```
+
+macOS / Linux：
+
+```bash
+python3 main.py new-vendor Veligames
+```
+
+`Veligames` 可替換成任何 vendor 名稱，例如 `CasinoGate` 或 `Vibra_Gaming`。
+
+舊的 `run_new_vendor.py Veligames` 仍保留作為相容入口，內部會轉呼叫 `main.py new-vendor Veligames`。
+
 一次執行：建立 draft JSON → 產生 API parameter validation 與 User Behavior 案例 → 輸出 XMind → 回讀驗證。
 
 API parameter test 會優先使用 doc reader 抽到的 request / response pre。request/response 範例不會從 parameter table 自產 sample；抓不到 pre 時輸出 `{}`，讓缺資料明確暴露。API parameter case 的參數順序會依 request pre 的欄位順序排列，pre 沒出現但 parameter table 有列的欄位會排在後面。

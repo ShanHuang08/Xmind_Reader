@@ -48,6 +48,9 @@ Examples:
   Generate draft JSON, structured test cases, and final XMind:
     python main.py generate --vendor Esoterica
 
+  Read a new vendor and generate its test-case XMind:
+    python main.py new-vendor Veligames
+
 Output folders:
   xmind reader -> xmind_detail/<Vendor>/
   doc reader   -> new_vendor_detail/<Vendor>/
@@ -56,12 +59,13 @@ Output folders:
   generate     -> output/<Vendor>/draft_test_cases.json and output/<Vendor>/<Vendor>_test_cases.xmind
 """,
     )
-    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,url,generate}")
+    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,url,generate,new-vendor}")
     _add_xmind_parser(subparsers)
     _add_doc_parser(subparsers)
     _add_pdf_parser(subparsers)
     _add_url_parser(subparsers)
     _add_generate_parser(subparsers)
+    _add_new_vendor_parser(subparsers)
     parsed = parser.parse_args(args)
 
     if parsed.reader is None:
@@ -72,6 +76,14 @@ Output folders:
         from xmind_reader_main import main as xmind_main
 
         return xmind_main(_forward_args(parsed))
+
+    if parsed.reader == "new-vendor":
+        from new_vendor_main import main as new_vendor_main
+
+        return new_vendor_main(_forward_args(
+            parsed,
+            names=("vendor", "input_root", "xmind_detail", "vendor_detail", "output", "log_level", "force"),
+        ))
 
     if parsed.reader == "doc":
         from doc_reader_main import main as doc_main
@@ -298,6 +310,32 @@ Examples:
         action="store_true",
         help="Also export a delivery XMind copy with visible merge_key topics removed.",
     )
+
+
+def _add_new_vendor_parser(subparsers: argparse._SubParsersAction) -> None:
+    new_vendor = subparsers.add_parser(
+        "new-vendor",
+        help="Read a vendor document and generate its test-case XMind.",
+        description="Find inputs recursively, read User Behavior and vendor docs, then generate and validate XMind.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py new-vendor Veligames
+  python3 main.py new-vendor Veligames --input-root .
+  python main.py new-vendor Veligames --force
+""",
+    )
+    new_vendor.add_argument("vendor", help="Vendor name, for example Veligames.")
+    new_vendor.add_argument(
+        "--input-root",
+        default=".",
+        help="Root folder searched recursively for user_behavior_map.xmind and Vendor_<Vendor>.doc/.docx.",
+    )
+    new_vendor.add_argument("--xmind-detail", default="xmind_detail")
+    new_vendor.add_argument("--vendor-detail", default="new_vendor_detail")
+    new_vendor.add_argument("--output", default="output")
+    new_vendor.add_argument("--log-level", default="INFO")
+    new_vendor.add_argument("--force", action="store_true", help="Force vendor document re-reading.")
 
 
 def _forward_args(
