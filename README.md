@@ -109,17 +109,25 @@ Windows：
 
 ```bash
 python main.py new-vendor Veligames
+python run_new_vendor.py Veligames
 ```
 
 macOS / Linux：
 
 ```bash
 python3 main.py new-vendor Veligames
+python3 run_new_vendor.py Veligames
 ```
 
 `Veligames` 可替換成任何 vendor 名稱，例如 `CasinoGate` 或 `Vibra_Gaming`。
 
 舊的 `run_new_vendor.py Veligames` 仍保留作為相容入口，內部會轉呼叫 `main.py new-vendor Veligames`。
+
+兩個入口共用 `src/new_vendor_main.py` 的 `build_new_vendor_parser()`：
+
+- `python run_new_vendor.py Veligames`：簡化入口，只接受 vendor 名稱。
+- `python main.py new-vendor Veligames`：完整入口，可使用 `--input-root`、`--output`、`--force` 等 pipeline options。
+- `run_new_vendor.py -h` 與 `main.py new-vendor -h` 會依入口顯示各自適用的說明，但 vendor argument 的定義只維護一份。
 
 一次執行：建立 draft JSON → 產生 API parameter validation 與 User Behavior 案例 → 輸出 XMind → 回讀驗證。
 

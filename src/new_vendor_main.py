@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from doc_reader_main import main as doc_main
@@ -11,16 +12,42 @@ from pipeline.input_discovery import choose_match, find_vendor_document
 from xmind_reader_main import main as xmind_main
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read a new vendor and generate its test-case XMind.")
-    parser.add_argument("vendor", help="Vendor name, for example Veligames.")
+def build_new_vendor_parser(
+    parser: argparse.ArgumentParser | None = None,
+    *,
+    wrapper: bool = False,
+) -> argparse.ArgumentParser:
+    """Build the shared parser for main.py and the standalone wrapper."""
+    if parser is None:
+        python_command = "python3" if sys.platform == "darwin" else "python"
+        example = (
+            f"{python_command} run_new_vendor.py Veligames"
+            if wrapper
+            else "python main.py new-vendor Veligames"
+        )
+        parser = argparse.ArgumentParser(
+            description="Read a new vendor and generate its test-case XMind.",
+            epilog=f"Example command: {example}",
+        )
+
+    parser.add_argument(
+        "vendor",
+        help="Vendor name, for example Veligames, CasinoGate, Softgaming.",
+    )
+    if wrapper:
+        return parser
+
     parser.add_argument("--input-root", default=".", help="Root folder to search recursively. Default: .")
     parser.add_argument("--xmind-detail", default="xmind_detail")
     parser.add_argument("--vendor-detail", default="new_vendor_detail")
     parser.add_argument("--output", default="output")
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--force", action="store_true", help="Force document re-reading.")
-    parser.add_argument("--no-merge-key-copy", action="store_true", default=True)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_new_vendor_parser()
     args = parser.parse_args(argv)
 
     root = Path(args.input_root).resolve()

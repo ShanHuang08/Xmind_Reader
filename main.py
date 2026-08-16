@@ -80,10 +80,14 @@ Output folders:
     if parsed.reader == "new-vendor":
         from new_vendor_main import main as new_vendor_main
 
-        return new_vendor_main(_forward_args(
-            parsed,
-            names=("vendor", "input_root", "xmind_detail", "vendor_detail", "output", "log_level", "force"),
-        ))
+        forwarded = [parsed.vendor]
+        forwarded.extend(
+            _forward_args(
+                parsed,
+                names=("input_root", "xmind_detail", "vendor_detail", "output", "log_level", "force"),
+            )
+        )
+        return new_vendor_main(forwarded)
 
     if parsed.reader == "doc":
         from doc_reader_main import main as doc_main
@@ -313,6 +317,8 @@ Examples:
 
 
 def _add_new_vendor_parser(subparsers: argparse._SubParsersAction) -> None:
+    from new_vendor_main import build_new_vendor_parser
+
     new_vendor = subparsers.add_parser(
         "new-vendor",
         help="Read a vendor document and generate its test-case XMind.",
@@ -325,17 +331,7 @@ Examples:
   python main.py new-vendor Veligames --force
 """,
     )
-    new_vendor.add_argument("vendor", help="Vendor name, for example Veligames.")
-    new_vendor.add_argument(
-        "--input-root",
-        default=".",
-        help="Root folder searched recursively for user_behavior_map.xmind and Vendor_<Vendor>.doc/.docx.",
-    )
-    new_vendor.add_argument("--xmind-detail", default="xmind_detail")
-    new_vendor.add_argument("--vendor-detail", default="new_vendor_detail")
-    new_vendor.add_argument("--output", default="output")
-    new_vendor.add_argument("--log-level", default="INFO")
-    new_vendor.add_argument("--force", action="store_true", help="Force vendor document re-reading.")
+    build_new_vendor_parser(new_vendor)
 
 
 def _forward_args(
