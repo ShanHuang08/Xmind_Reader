@@ -46,6 +46,11 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Optional vendor folder name. If omitted, it is inferred from each XMind file name.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenerate the XMind JSON/knowledge files even when the new map is smaller.",
+    )
     parser.add_argument("--log-level", default="INFO", help="Logging level.")
     args = parser.parse_args(argv)
 
@@ -80,7 +85,11 @@ def main(argv: list[str] | None = None) -> int:
             existing_stats = load_existing_raw_stats(vendor_output_dir, xmind_path.stem)
             current_meta = source_meta(xmind_path)
             existing_meta = load_existing_source_meta(vendor_output_dir, xmind_path.stem)
-            decision = processing_decision(parsed.get("stats", {}), existing_stats, current_meta, existing_meta)
+            decision = (
+                "full"
+                if args.force
+                else processing_decision(parsed.get("stats", {}), existing_stats, current_meta, existing_meta)
+            )
             if decision == "skip_equal":
                 LOGGER.info(
                     "[%s] %s unchanged (%s topics, %s test cases). Skip regeneration.",

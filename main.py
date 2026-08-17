@@ -159,6 +159,11 @@ Examples:
         default="",
         help="Optional vendor folder name. If omitted, inferred from XMind file name.",
     )
+    xmind.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenerate XMind JSON/knowledge files even when the updated map is smaller.",
+    )
     xmind.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
 
 
