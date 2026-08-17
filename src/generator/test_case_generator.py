@@ -241,9 +241,15 @@ def _user_behavior_selectors(
     if category == "bet_and_settle_has_round_end_control_parameter":
         return [("bet_and_settle", "BetAndSettle > Has round-end control parameter")]
     if category == "multiple_bets_one_bet_endpoint":
-        return [("bet_and_settle", "Multiple Bets > one_bet_endpoint")]
+        return [
+            ("bet_and_settle", "Multiple Bets > one_bet_endpoint"),
+            ("bet_and_settle", "Vendor specific cases > Multiple Bets > one_bet_endpoint"),
+        ]
     if category == "multiple_bets_two_bet_endpoint":
-        return [("bet_and_settle", "Multiple Bets > two_bet_endpoint")]
+        return [
+            ("bet_and_settle", "Multiple Bets > two_bet_endpoint"),
+            ("bet_and_settle", "Vendor specific cases > Multiple Bets > two_bet_endpoint"),
+        ]
     if category == "multiple_settlements_has_round_end_control_parameter":
         return [
             ("bet_and_settle", "Multiple Settlement > Has round-end control parameter"),
@@ -252,7 +258,11 @@ def _user_behavior_selectors(
     if category == "multiple_settlements_no_round_end_control_parameter":
         return [("bet_and_settle", "Multiple Settlement > No round-end control parameter")]
     if category in {"rollback_bet", "rollback_settled_bet"}:
-        return [("cancel_bet", "rollback_by_bet")]
+        return [
+            ("cancel_bet", "rollback_by_bet"),
+            ("cancel_bet", "Vendor specific cases > rollback_by_bet"),
+            ("cancel_bet", "Vendor specific cases > Rollback Settled Bet"),
+        ]
     if category == "modify_settlement_adjustment":
         return [("bet_and_settle", "modify_settlement_adjustment")]
     if category == "freespin":
