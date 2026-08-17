@@ -283,10 +283,10 @@ def _validate_api_parameter_case(
         return
     response_json = expected_error.get("response_json")
     if not isinstance(response_json, dict) or not response_json:
-        errors.append(
-            _error(
+        warnings.append(
+            _warning(
                 f"{path}.expected_error.response_json",
-                "API parameter test cases must include a non-empty error response JSON object.",
+                "Vendor documentation does not provide a non-empty error response JSON object.",
             )
         )
     elif not any(isinstance(value, (str, int, float, bool)) for value in response_json.values()):

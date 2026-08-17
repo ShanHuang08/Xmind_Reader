@@ -234,6 +234,82 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
 
 
 class ParameterDependencyGeneratorTests(unittest.TestCase):
+    def test_path_parameter_is_not_duplicated_by_request_table(self) -> None:
+        endpoint = {
+            "endpoint": "/v1/sessions/{sessionId}",
+            "role": "authentication",
+            "request_parameters": [
+                {"name": "sessionId", "type": "string", "required": "Y"},
+            ],
+            "error_response_example": {"code": "INVALID_REQUEST", "message": "Invalid sessionId"},
+        }
+        context = {
+            "endpoint_roles": [endpoint],
+            "parameter_error": {"code": "INVALID_REQUEST", "source": "documented"},
+            "case_authoring_rules": {"default_game_code": "GAME"},
+            "default_test_account": "account",
+        }
+
+        cases = _parameter_validation_cases(context, [])
+
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["parameter"], "sessionId")
+        self.assertEqual(cases[0]["endpoint_name"], "sessions")
+
+    def test_operation_variants_generate_separate_parameter_groups(self) -> None:
+        endpoint = {
+            "endpoint": "/v1/transactions",
+            "role": "supporting_endpoint",
+            "operation_variants": [
+                {
+                    "operation": "BET",
+                    "request_parameters": [
+                        {"name": "betId", "type": "string", "required": "Y"},
+                    ],
+                    "request_example": {"betId": "bet-1"},
+                    "error_response_example": {"code": "INVALID_REQUEST", "message": "Invalid betId"},
+                },
+                {
+                    "operation": "WIN",
+                    "request_parameters": [
+                        {"name": "winId", "type": "string", "required": "Y"},
+                        {"name": "details", "type": "object", "required": "N"},
+                        {"name": "details/id", "type": "string", "required": "Y"},
+                    ],
+                    "request_example": {"winId": "win-1"},
+                    "error_response_example": {"code": "INVALID_REQUEST", "message": "Invalid winId"},
+                },
+            ],
+        }
+        context = {
+            "endpoint_roles": [endpoint],
+            "parameter_error": {"code": "INVALID_REQUEST", "source": "documented"},
+            "case_authoring_rules": {"default_game_code": "GAME"},
+            "default_test_account": "account",
+        }
+
+        cases = _parameter_validation_cases(context, [])
+
+        self.assertEqual(
+            [case["parameter"] for case in cases],
+            ["betId", "winId", "details", "details/id"],
+        )
+        self.assertEqual(
+            [case["endpoint_name"] for case in cases],
+            [
+                "transactions - BET",
+                "transactions - WIN",
+                "transactions - WIN",
+                "transactions - WIN",
+            ],
+        )
+        self.assertEqual(
+            [case["endpoint_operation"] for case in cases],
+            ["BET", "WIN", "WIN", "WIN"],
+        )
+        details_case = next(case for case in cases if case["parameter"] == "details")
+        self.assertIn('{"id": "details/id_001"}', details_case["steps"][0]["step"])
+
     def test_affected_parameter_uses_dependency_cases_and_unaffected_stays_standard(self) -> None:
         endpoint = {
             "endpoint": "/v1/cancel",

@@ -60,7 +60,7 @@ def _account_from_vendor(vendor: str, today: date | None = None) -> str:
 
 def _select_parameter_error(
     error_codes: list[dict[str, Any]], endpoints: list[dict[str, Any]] | None = None
-) -> dict[str, str]:
+) -> dict[str, Any]:
     for item in error_codes:
         text = " ".join(str(item.get(key, "")) for key in ("code", "context", "message", "description"))
         lowered = re.sub(r"[_-]+", " ", text.lower())
@@ -73,11 +73,14 @@ def _select_parameter_error(
             or "invalid parameters" in lowered
             or "parameters are missing or invalid" in lowered
         ):
-            return {
+            result: dict[str, Any] = {
                 "code": str(item.get("code", "")).strip(),
                 "source": "documented",
                 "description": str(item.get("context") or item.get("message") or item.get("description") or ""),
             }
+            if isinstance(item.get("response_json"), dict) and item["response_json"]:
+                result["response_json"] = item["response_json"]
+            return result
 
     remaining = []
     excluded_reasons = []

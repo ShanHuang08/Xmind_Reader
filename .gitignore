@@ -11,6 +11,7 @@ __pycache__/
 xmind_detail/
 new_vendor_detail/
 output/
+regression-results/
 tools/
 
 # Binary input files (too large for GitHub)

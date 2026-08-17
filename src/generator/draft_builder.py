@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from datetime import date
@@ -100,7 +101,9 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
 
     capability_profile = _read_json(vendor_dir / "capability_profile.json")
     endpoints = _read_json(vendor_dir / "endpoints.json")
-    error_codes = _read_json(vendor_dir / "error_codes.json")
+    error_codes = _merge_supplementary_error_codes(
+        _read_json(vendor_dir / "error_codes.json"), vendor_dir
+    )
     dependency_path = vendor_dir / "parameter_dependencies.json"
     dependency_report_path = vendor_dir / "parameter_dependency_validation_report.json"
     parameter_dependencies = _read_json(dependency_path) if dependency_path.exists() else {}
@@ -177,6 +180,10 @@ def _endpoint_role(
         "request_example": endpoint.get("request_example", {}),
         "success_response_example": endpoint.get("success_response_example", {}),
         "error_response_example": endpoint.get("error_response_example", {}),
+        # Some documents define response examples per operation variant
+        # (BET/WIN/ROLLBACK, etc.) instead of on the shared endpoint. Keep
+        # those examples in the draft so parameter validation can reuse them.
+        "operation_variants": endpoint.get("operation_variants", []),
         "parameter_dependency": endpoint.get("parameter_dependency", False),
         "dependency_schema_version": endpoint.get("dependency_schema_version", ""),
         "dependency_selectors": endpoint.get("dependency_selectors", []),
@@ -508,6 +515,107 @@ def _supplementary_sources(vendor_dir: Path) -> dict[str, Any]:
             ],
         }
     return sources
+
+
+def _merge_supplementary_error_codes(
+    error_codes: list[dict[str, Any]], vendor_dir: Path
+) -> list[dict[str, Any]]:
+    """Enrich DOC error rows with explicitly documented PDF table details."""
+    merged = {
+        str(item.get("code", "")).strip(): dict(item)
+        for item in error_codes
+        if isinstance(item, dict) and str(item.get("code", "")).strip()
+    }
+    full_text_path = vendor_dir / "vendor_pdf" / "full_text.md"
+    if not full_text_path.is_file():
+        return list(merged.values())
+
+    for item in _markdown_error_codes(full_text_path.read_text(encoding="utf-8")):
+        code = str(item["code"])
+        current = merged.setdefault(code, {"code": code, "context": ""})
+        supplementary_context = str(item.get("context", "")).strip()
+        current_context = str(current.get("context", "")).strip()
+        if supplementary_context and len(supplementary_context) > len(current_context):
+            current["context"] = supplementary_context
+        if item.get("response_json"):
+            current["response_json"] = item["response_json"]
+            current["response_json_source"] = "supplementary_pdf"
+    return sorted(
+        merged.values(),
+        key=lambda item: (
+            0,
+            int(str(item["code"])),
+        )
+        if str(item["code"]).isdigit()
+        else (1, str(item["code"]).lower()),
+    )
+
+
+def _markdown_error_codes(markdown: str) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines):
+        headers = _markdown_cells(line)
+        normalized = [_plain_markdown_cell(cell).lower() for cell in headers]
+        if "code" not in normalized or not any(
+            value in normalized for value in ("message", "description")
+        ):
+            continue
+        code_index = normalized.index("code")
+        description_indexes = [
+            position
+            for position, value in enumerate(normalized)
+            if value in {"message", "description"}
+        ]
+        example_index = normalized.index("example") if "example" in normalized else None
+        for row_line in lines[index + 2 :]:
+            if not row_line.lstrip().startswith("|"):
+                break
+            cells = _markdown_cells(row_line)
+            if len(cells) <= code_index:
+                continue
+            code = _plain_markdown_cell(cells[code_index])
+            if not re.fullmatch(r"\d{1,6}", code):
+                continue
+            context = " | ".join(
+                value
+                for value in (
+                    _plain_markdown_cell(cells[position])
+                    for position in description_indexes
+                    if position < len(cells)
+                )
+                if value
+            )
+            item: dict[str, Any] = {"code": code, "context": context}
+            if example_index is not None and example_index < len(cells):
+                response_json = _markdown_json_example(cells[example_index])
+                if response_json:
+                    item["response_json"] = response_json
+            output.append(item)
+        break
+    return output
+
+
+def _markdown_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _plain_markdown_cell(value: str) -> str:
+    text = re.sub(r"<br\s*/?>", " ", value, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"[*_`]+", "", text)
+    return " ".join(html.unescape(text).split())
+
+
+def _markdown_json_example(value: str) -> dict[str, Any]:
+    text = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).strip()
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _resolved_game_code(vendor: str, game_codes: list[dict[str, Any]]) -> str:

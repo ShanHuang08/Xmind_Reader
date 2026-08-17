@@ -504,11 +504,16 @@ def _parameter_validation_cases(
     context: dict[str, Any], reference_files: list[str]
 ) -> list[dict[str, Any]]:
     cases = []
-    for endpoint in context.get("endpoint_roles", []):
+    for endpoint in _parameter_validation_endpoints(context):
         endpoint_name = endpoint.get("endpoint", "")
         if not endpoint_name:
             continue
-        for parameter in _path_parameters(endpoint):
+        path_parameters = _path_parameters(endpoint)
+        path_parameter_names = {
+            canonical_parameter_path(parameter.get("name", ""))
+            for parameter in path_parameters
+        }
+        for parameter in path_parameters:
             cases.append(_parameter_case(context, endpoint, parameter, reference_files))
         dependency_enabled = bool(endpoint.get("parameter_dependency"))
         dependency_rules = endpoint.get("parameter_dependencies", []) if dependency_enabled else []
@@ -519,6 +524,8 @@ def _parameter_validation_cases(
         for parameter in _expanded_request_parameters(endpoint):
             parameter_name = parameter.get("name", "")
             if not parameter_name:
+                continue
+            if canonical_parameter_path(parameter_name) in path_parameter_names:
                 continue
             if dependency_enabled and canonical_parameter_path(parameter_name) in affected:
                 continue
@@ -534,6 +541,46 @@ def _parameter_validation_cases(
                 )
             )
     return cases
+
+
+def _parameter_validation_endpoints(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expand operation-specific parameter tables into generation endpoints."""
+    output: list[dict[str, Any]] = []
+    for endpoint in context.get("endpoint_roles", []):
+        if not isinstance(endpoint, dict):
+            continue
+        variants = [
+            variant
+            for variant in endpoint.get("operation_variants", [])
+            if isinstance(variant, dict) and variant.get("request_parameters")
+        ]
+        if not variants:
+            output.append(endpoint)
+            continue
+
+        endpoint_name = str(endpoint.get("endpoint", ""))
+        endpoint_display_name = _endpoint_display_name(endpoint_name)
+        for variant in variants:
+            expanded = deepcopy(endpoint)
+            for key in (
+                "method",
+                "request_parameters",
+                "response_parameters",
+                "request_example",
+                "success_response_example",
+                "error_response_example",
+            ):
+                if key in variant:
+                    expanded[key] = deepcopy(variant[key])
+            operation = str(variant.get("operation", "")).strip()
+            expanded["endpoint_operation"] = operation
+            expanded["endpoint_name"] = (
+                f"{endpoint_display_name} - {operation}"
+                if operation
+                else endpoint_display_name
+            )
+            output.append(expanded)
+    return output
 
 
 def _dependency_contextual_parameter_cases(
@@ -687,6 +734,8 @@ def _dependency_normal_request_value(endpoint: dict[str, Any], field: str) -> st
             raw_value = (
                 '"EUR"'
                 if _dependency_leaf_name(child_path) == "currency"
+                else "{}"
+                if _is_object_parameter(child)
                 else _sample_value(child)
             )
             try:
@@ -703,7 +752,11 @@ def _dependency_normal_request_value(endpoint: dict[str, Any], field: str) -> st
 def _set_nested_value(payload: dict[str, Any], path: list[str], value: Any) -> None:
     current = payload
     for part in path[:-1]:
-        current = current.setdefault(part, {})
+        nested = current.get(part)
+        if not isinstance(nested, dict):
+            nested = {}
+            current[part] = nested
+        current = nested
     if path:
         current[path[-1]] = value
 
@@ -1102,7 +1155,10 @@ def _parameter_case(
     reference_files: list[str],
 ) -> dict[str, Any]:
     endpoint_name = endpoint.get("endpoint", "")
-    endpoint_display_name = _endpoint_display_name(endpoint_name)
+    endpoint_display_name = str(
+        endpoint.get("endpoint_name") or _endpoint_display_name(endpoint_name)
+    )
+    endpoint_operation = str(endpoint.get("endpoint_operation", "")).strip()
     parameter_name = parameter.get("name", "")
     scenario = API_PARAMETER_CASE_TITLE_TEMPLATE.format(parameter=parameter_name)
     expected_error = _expected_error_for_parameter(context, parameter)
@@ -1122,6 +1178,7 @@ def _parameter_case(
         "endpoint": endpoint_name,
         "endpoint_name": endpoint_display_name,
         "endpoint_group": endpoint.get("role", ""),
+        "endpoint_operation": endpoint_operation,
         "endpoints": [endpoint_name],
         "parameter": parameter_name,
         "preconditions": _preconditions(context, endpoint),
@@ -1133,6 +1190,7 @@ def _parameter_case(
         "source_reference": {
             "generated_by": GENERATED_BY,
             "vendor_doc": [endpoint_name],
+            "endpoint_operation": endpoint_operation,
             "xmind_reference_cases": reference_files,
         },
         "unresolved_questions": [],
@@ -1842,8 +1900,33 @@ def _find_example_path_value(data: Any, name: str) -> Any:
 def _expected_error_response(
     context: dict[str, Any], endpoint: dict[str, Any], expected_error: dict[str, Any]
 ) -> dict[str, Any]:
-    error = endpoint.get("error_response_example")
-    if isinstance(error, dict) and error:
+    documented_response = expected_error.get("response_json")
+    if isinstance(documented_response, dict) and documented_response:
+        return deepcopy(documented_response)
+    examples = []
+    endpoints = [endpoint]
+    # A vendor may document one shared error shape for several endpoints. If
+    # this endpoint has no example, use a compatible example from the same
+    # vendor before falling back to the explicitly documented empty object.
+    endpoints.extend(
+        item
+        for item in context.get("endpoint_roles", [])
+        if isinstance(item, dict) and item is not endpoint
+    )
+    for candidate in endpoints:
+        error = candidate.get("error_response_example")
+        if isinstance(error, dict) and error:
+            examples.append(error)
+        # Shared endpoints may carry their actual response examples on
+        # operation variants.
+        for variant in candidate.get("operation_variants", []):
+            if not isinstance(variant, dict):
+                continue
+            variant_error = variant.get("error_response_example")
+            if isinstance(variant_error, dict) and variant_error:
+                examples.append(variant_error)
+
+    for error in examples:
         # Vendor docs commonly provide one fixed Error Name example (for
         # example INSUFFICIENT_BALANCE) while the error-code table separately
         # documents the HTTP-level parameter error. Reuse the response shape,
@@ -1889,6 +1972,11 @@ def _error_response_code_key(response: dict[str, Any]) -> str:
 
 
 def _is_parameter_validation_error_response(error: dict[str, Any]) -> bool:
+    if (
+        str(error.get("result", "")).upper() == "ERROR"
+        and any(key in error for key in ("code", "error_code", "errorCode"))
+    ):
+        return True
     message = str(error.get("error") or error.get("message") or error.get("description") or "")
     normalized = message.lower()
     transaction_error_terms = (
@@ -1904,6 +1992,10 @@ def _is_parameter_validation_error_response(error: dict[str, Any]) -> bool:
     parameter_error_terms = (
         "invalid parameter",
         "invalid parameters",
+        # A number of vendors describe parameter failures with the concrete
+        # field value (for example, "Invalid currency") rather than the word
+        # parameter.
+        "invalid ",
         "parameter",
         "invalid signature",
         "missing",
@@ -2025,7 +2117,11 @@ def _endpoint_display_name(endpoint_path: str) -> str:
     text = str(endpoint_path or "").strip().rstrip("/")
     if not text:
         return "unknown"
-    return text.rsplit("/", 1)[-1] or text
+    parts = [part for part in text.split("/") if part]
+    for part in reversed(parts):
+        if not (part.startswith("{") and part.endswith("}")):
+            return part
+    return parts[-1] if parts else text
 
 
 def _request_payload(endpoint: dict[str, Any]) -> str:

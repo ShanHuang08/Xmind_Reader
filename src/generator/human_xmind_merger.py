@@ -39,7 +39,9 @@ def stable_case_key(case: dict[str, Any]) -> str:
     endpoint = str(case.get("endpoint", "")).strip()
     parameter = str(case.get("parameter", "")).strip()
     if category == "parameter_validation" or case.get("output_section") == API_PARAMETER_TEST_SECTION:
-        return f"param::{_slug(endpoint)}::{_slug(parameter)}"
+        operation = str(case.get("endpoint_operation", "")).strip()
+        operation_part = f"::{_slug(operation)}" if operation else ""
+        return f"param::{_slug(endpoint)}{operation_part}::{_slug(parameter)}"
 
     source_reference = case.get("source_reference") if isinstance(case.get("source_reference"), dict) else {}
     generated_by = str(source_reference.get("generated_by", ""))

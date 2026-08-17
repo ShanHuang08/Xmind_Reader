@@ -8,6 +8,7 @@ from collections import Counter
 from copy import deepcopy
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
+from xml.etree import ElementTree
 
 from doc_reader.parameter_dependency import compile_parameter_dependencies
 
@@ -45,6 +46,8 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
     sections = _sections(parsed.get("paragraphs", []))
     endpoints = _extract_endpoints(parsed, sections)
     operation_variants = _endpoint_operation_variants(parsed)
+    for endpoint, variants in _section_endpoint_operation_variants(parsed, sections).items():
+        operation_variants.setdefault(endpoint, variants)
     error_codes = _extract_error_codes(parsed, text)
     dependency_profile, dependency_report = compile_parameter_dependencies(endpoints, error_codes)
     endpoint_examples = _endpoint_json_examples(sections, vendor_name)
@@ -99,7 +102,9 @@ def _extract_endpoints(parsed: dict[str, Any], sections: list[dict[str, Any]]) -
     parameter_tables = _endpoint_parameter_tables(parsed, sections)
     for section in sections:
         section_text = "\n".join(section.get("content", []))
-        for endpoint in ENDPOINT_RE.findall(section_text):
+        title_endpoints = _endpoints_from_section_title(section.get("title", ""))
+        section_endpoints = title_endpoints or _unique_matches(ENDPOINT_RE.findall(section_text))
+        for endpoint in section_endpoints:
             context = _context_around(full_text, endpoint)
             endpoints.setdefault(
                 endpoint,
@@ -287,6 +292,61 @@ def _endpoint_operation_variants(parsed: dict[str, Any]) -> dict[str, list[dict[
     return output
 
 
+def _section_endpoint_operation_variants(
+    parsed: dict[str, Any], sections: list[dict[str, Any]]
+) -> dict[str, list[dict[str, Any]]]:
+    """Build variants for documents whose operations use regular H2 sections."""
+    tables = [table for table in parsed.get("tables", []) if _is_parameter_table(table)]
+    cursor = 0
+    output: dict[str, list[dict[str, Any]]] = {}
+    for section in sections:
+        title = str(section.get("title", ""))
+        endpoint = _endpoint_from_section_title(title)
+        if not endpoint:
+            continue
+        request_parameters = _parameter_rows(tables[cursor]) if cursor < len(tables) else []
+        cursor += 1
+        response_parameters = _parameter_rows(tables[cursor]) if cursor < len(tables) else []
+        cursor += 1
+
+        request_examples: list[dict[str, Any]] = []
+        success_examples: list[dict[str, Any]] = []
+        error_examples: list[dict[str, Any]] = []
+        for block in section.get("content", []):
+            query = _query_params_from_code_block(str(block))
+            if query:
+                request_examples.append(query)
+            for request, response in _xml_exchange_examples(str(block)):
+                if request:
+                    request_examples.append(request)
+                if str(response.get("result", "")).upper() == "ERROR":
+                    error_examples.append(response)
+                elif response:
+                    success_examples.append(response)
+
+        variant = {
+            "endpoint": endpoint,
+            "method": _method_from_heading(title),
+            "operation": _operation_from_heading(title),
+            "title": title,
+            "request_parameters": request_parameters,
+            "response_parameters": response_parameters,
+            "request_examples": _label_request_examples(request_examples),
+            "success_response_examples": success_examples,
+            "error_response_examples": error_examples,
+        }
+        if request_examples:
+            variant["request_example"] = request_examples[0]
+        if success_examples:
+            variant["success_response_example"] = success_examples[0]
+        if error_examples:
+            variant["error_response_example"] = error_examples[0]
+        output.setdefault(endpoint, []).append(
+            {key: value for key, value in variant.items() if value not in ("", [], {})}
+        )
+    return output
+
+
 def _is_endpoint_operation_heading(style: str, text: str) -> bool:
     return (
         (style in {"h3", "heading 3"} or style.startswith("heading 3"))
@@ -399,9 +459,12 @@ def _method_from_heading(text: str) -> str:
 
 
 def _operation_from_heading(text: str) -> str:
-    if "-" not in text:
-        return ""
-    return text.rsplit("-", 1)[-1].strip()
+    parenthetical = re.search(r"\(([^()]+)\)\s*$", text)
+    if parenthetical:
+        return parenthetical.group(1).strip()
+    if "-" in text:
+        return text.rsplit("-", 1)[-1].strip()
+    return ""
 
 
 def _endpoint_json_examples(sections: list[dict[str, Any]], vendor_name: str = "") -> dict[str, dict[str, Any]]:
@@ -409,7 +472,8 @@ def _endpoint_json_examples(sections: list[dict[str, Any]], vendor_name: str = "
     for section in sections:
         title = section.get("title", "")
         content = [str(item) for item in section.get("content", [])]
-        section_endpoints = _unique_matches(ENDPOINT_RE.findall(title + "\n" + "\n".join(content)))
+        title_endpoints = _endpoints_from_section_title(title)
+        section_endpoints = title_endpoints or _unique_matches(ENDPOINT_RE.findall("\n".join(content)))
         if not section_endpoints:
             continue
 
@@ -422,6 +486,23 @@ def _endpoint_json_examples(sections: list[dict[str, Any]], vendor_name: str = "
             if block_mode:
                 example_mode = block_mode
                 example_label = str(block)
+
+            target_endpoint = last_label_endpoint or current_endpoint
+            if target_endpoint:
+                entry = examples.setdefault(target_endpoint, {})
+                for request, response in _xml_exchange_examples(block):
+                    if request:
+                        _store_endpoint_example(
+                            entry, "request_example", example_label, request, vendor_name
+                        )
+                    if str(response.get("result", "")).upper() == "ERROR":
+                        _store_endpoint_example(
+                            entry, "error_response_example", example_label, response, vendor_name
+                        )
+                    elif response:
+                        _store_endpoint_example(
+                            entry, "success_response_example", example_label, response, vendor_name
+                        )
 
             parsed_examples = _examples_from_code_block(block)
             if not parsed_examples:
@@ -555,10 +636,17 @@ def _query_params_from_code_block(block: str) -> dict[str, Any] | None:
     text = str(block or "").strip()
     if not text:
         return None
-    first_line = text.splitlines()[0].strip()
-    if not first_line.startswith("?") and not urlsplit(first_line).query:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    first_line = lines[0]
+    split = urlsplit(first_line)
+    if not first_line.startswith("?") and "?" not in first_line:
         return None
-    query = urlsplit(first_line).query
+    query_parts = [split.query]
+    for line in lines[1:]:
+        continuation = line.lstrip("&?").strip()
+        if re.match(r"^[^=&\s]+\s*=", continuation):
+            query_parts.append(continuation)
+    query = "&".join(part for part in query_parts if part)
     if not query:
         query = first_line[1:] if first_line.startswith("?") else ""
     if not query:
@@ -571,6 +659,30 @@ def _query_params_from_code_block(block: str) -> dict[str, Any] | None:
         if key and key != "?":
             output[key] = value
     return output or None
+
+
+def _xml_exchange_examples(block: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    exchanges: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for fragment in re.findall(r"<EXTSYSTEM\b[^>]*>.*?</EXTSYSTEM>", block, re.I | re.S):
+        try:
+            root = ElementTree.fromstring(fragment)
+        except ElementTree.ParseError:
+            continue
+        request = _xml_children_dict(root.find("REQUEST"))
+        response = _xml_children_dict(root.find("RESPONSE"))
+        if request or response:
+            exchanges.append((request, response))
+    return exchanges
+
+
+def _xml_children_dict(element: ElementTree.Element | None) -> dict[str, Any]:
+    if element is None:
+        return {}
+    return {
+        str(child.tag).lower(): (child.text or "").strip()
+        for child in element
+        if str(child.tag).strip()
+    }
 
 
 def _code_block_label(block: str) -> str:
