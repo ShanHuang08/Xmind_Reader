@@ -348,6 +348,18 @@ def _user_behavior_output_section(
     if base not in {"User Behavior > Bet and Settle", "User Behavior > Cancel Bet"}:
         return base
 
+    # These capability-driven cases are vendor-specific by definition.  Keep
+    # them under the explicit branch even when an older reference JSON does not
+    # yet contain the Vendor specific cases wrapper.
+    if category in {"multiple_bets", "multiple_bets_one_bet_endpoint", "multiple_bets_two_bet_endpoint"}:
+        marker = next((i for i, value in enumerate(lowered) if value == "multiple bets"), None)
+        suffix = parts[marker:] if marker is not None else ["Multiple Bets"]
+        return " > ".join(["User Behavior > Bet and Settle", "Vendor specific cases", *suffix])
+    if category in {"rollback_bet", "rollback_settled_bet"}:
+        marker = next((i for i, value in enumerate(lowered) if value in {"rollback settled bet", "rollback settlement"}), None)
+        suffix = parts[marker:] if marker is not None else ["Rollback Settled Bet"]
+        return " > ".join(["User Behavior > Cancel Bet", "Vendor specific cases", *suffix])
+
     # Vendor-specific cases are intentionally retained as a visible branch.
     if "vendor specific cases" in lowered:
         index = lowered.index("vendor specific cases")
