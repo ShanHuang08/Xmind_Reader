@@ -28,6 +28,22 @@ USER_BEHAVIOR_GENERATED_BY = "user-behavior-reference-generator/v1"
 VENDOR_TEST_SCENARIO_GENERATED_BY = "vendor-test-scenario-import/v1"
 DEPENDENCY_GENERATED_BY = "parameter-dependency-generator/v1"
 
+VENDOR_SPECIFIC_BEHAVIOR_CATEGORIES = {
+    "multiple_bets",
+    "multiple_bets_one_bet_endpoint",
+    "multiple_bets_two_bet_endpoint",
+    "multiple_settlements",
+    "multiple_settlements_has_round_end_control_parameter",
+    "multiple_settlements_no_round_end_control_parameter",
+    "bet_and_settle_has_round_end_control_parameter",
+    "modify_settlement_adjustment",
+    "idempotency",
+    "freespin",
+    "jackpot",
+    "rollback_bet",
+    "rollback_settled_bet",
+}
+
 UPPERCASE_ACTION_PARAMETER_VALUES = {
     "action": "ACTION",
     "method": "METHOD",
@@ -348,22 +364,21 @@ def _user_behavior_output_section(
     if base not in {"User Behavior > Bet and Settle", "User Behavior > Cancel Bet"}:
         return base
 
+    if category in VENDOR_SPECIFIC_BEHAVIOR_CATEGORIES:
+        vendor_root = "User Behavior > Cancel Bet" if base.endswith("Cancel Bet") else "User Behavior > Bet and Settle"
+        return f"{vendor_root} > Vendor specific cases"
+
     # These capability-driven cases are vendor-specific by definition.  Keep
     # them under the explicit branch even when an older reference JSON does not
     # yet contain the Vendor specific cases wrapper.
     if category in {"multiple_bets", "multiple_bets_one_bet_endpoint", "multiple_bets_two_bet_endpoint"}:
-        marker = next((i for i, value in enumerate(lowered) if value == "multiple bets"), None)
-        suffix = parts[marker:] if marker is not None else ["Multiple Bets"]
-        return " > ".join(["User Behavior > Bet and Settle", "Vendor specific cases", *suffix])
+        return "User Behavior > Bet and Settle > Vendor specific cases"
     if category in {"rollback_bet", "rollback_settled_bet"}:
-        marker = next((i for i, value in enumerate(lowered) if value in {"rollback settled bet", "rollback settlement"}), None)
-        suffix = parts[marker:] if marker is not None else ["Rollback Settled Bet"]
-        return " > ".join(["User Behavior > Cancel Bet", "Vendor specific cases", *suffix])
+        return "User Behavior > Cancel Bet > Vendor specific cases"
 
     # Vendor-specific cases are intentionally retained as a visible branch.
     if "vendor specific cases" in lowered:
-        index = lowered.index("vendor specific cases")
-        return " > ".join([base, *parts[index:]])
+        return f"{base} > Vendor specific cases"
 
     # BetAndSettle/Mandatory/<subcategory> maps to Bet and Settle/<subcategory>.
     if lowered[:2] == ["betandsettle", "mandatory"] and len(parts) > 2:
