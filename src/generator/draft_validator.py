@@ -193,7 +193,14 @@ def _validate_output_section(
 ) -> None:
     output_section = test_case.get("output_section", "")
     category = test_case.get("category", "")
-    if output_section and output_section not in ALLOWED_OUTPUT_SECTIONS:
+    is_allowed_descendant = any(
+        output_section.startswith(f"{parent} > ")
+        for parent in (
+            "User Behavior > Bet and Settle",
+            "User Behavior > Cancel Bet",
+        )
+    )
+    if output_section and output_section not in ALLOWED_OUTPUT_SECTIONS and not is_allowed_descendant:
         errors.append(
             _error(
                 f"{path}.output_section",
@@ -203,7 +210,16 @@ def _validate_output_section(
 
     expected_section = KNOWLEDGE_CATEGORY_TO_XMIND_SECTION.get(category)
     allowed_aliases = debit_credit_output_section_aliases().get(expected_section, set())
-    if expected_section and output_section and output_section not in {expected_section, *allowed_aliases}:
+    is_expected_descendant = bool(
+        expected_section
+        and output_section.startswith(f"{expected_section} > ")
+    )
+    if (
+        expected_section
+        and output_section
+        and output_section not in {expected_section, *allowed_aliases}
+        and not is_expected_descendant
+    ):
         errors.append(
             _error(
                 f"{path}.output_section",

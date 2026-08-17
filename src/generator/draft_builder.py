@@ -86,8 +86,29 @@ GENERATED_XMIND_STRUCTURE = {
         "children": {
             "Launch Game": "Launch URL and authenticate-related cases.",
             "Get Player balance": "Balance endpoint cases.",
-            "Bet and Settle": "Bet, settlement, betAndSettle, amount precision, multiple bets, multiple settlements, freespin settlement, jackpot settlement, and idempotency cases.",
-            "Cancel Bet": "Rollback, cancel bet, rollback settled bet, and rollback betAndSettle cases.",
+            "Bet and Settle": {
+                "description": "Bet, settlement, and BetAndSettle cases.",
+                "children": [
+                    "Positive cases",
+                    "Negative cases",
+                    "Player / Game status",
+                    "Special accounts",
+                    "Bet Duplicate",
+                    "Settle Duplicate",
+                    "Vendor specific cases",
+                ],
+            },
+            "Cancel Bet": {
+                "description": "Cancel and rollback cases.",
+                "children": [
+                    "Positive cases",
+                    "Negative cases",
+                    "Player / Game status",
+                    "Special accounts",
+                    "Rollback Duplicate",
+                    "Vendor specific cases",
+                ],
+            },
             "Game type": "Game front-end cases grouped by game type, such as Slots, Arcade game, Mini game, and Crash game.",
         },
     },

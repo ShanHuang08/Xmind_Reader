@@ -309,9 +309,7 @@ def _user_behavior_case(
     reference_case: dict[str, Any],
     module_path: str,
 ) -> dict[str, Any]:
-    output_section = KNOWLEDGE_CATEGORY_TO_XMIND_SECTION.get(
-        category, "User Behavior > Bet and Settle"
-    )
+    output_section = _user_behavior_output_section(category, reference_case)
     scenario = _adapt_behavior_text(context, str(reference_case.get("scenario", "")))
     case = {
         "output_section": output_section,
@@ -333,6 +331,38 @@ def _user_behavior_case(
     }
     case["expected_error"] = _behavior_expected_error(context)
     return case
+
+
+def _user_behavior_output_section(
+    category: str, reference_case: dict[str, Any]
+) -> str:
+    """Project the revised User Behavior source tree into generated XMind paths."""
+    base = KNOWLEDGE_CATEGORY_TO_XMIND_SECTION.get(
+        category, "User Behavior > Bet and Settle"
+    )
+    if not base.startswith("User Behavior >"):
+        return base
+
+    parts = [part.strip() for part in str(reference_case.get("path", "")).split(">") if part.strip()]
+    lowered = [part.lower() for part in parts]
+    if base not in {"User Behavior > Bet and Settle", "User Behavior > Cancel Bet"}:
+        return base
+
+    # Vendor-specific cases are intentionally retained as a visible branch.
+    if "vendor specific cases" in lowered:
+        index = lowered.index("vendor specific cases")
+        return " > ".join([base, *parts[index:]])
+
+    # BetAndSettle/Mandatory/<subcategory> maps to Bet and Settle/<subcategory>.
+    if lowered[:2] == ["betandsettle", "mandatory"] and len(parts) > 2:
+        return " > ".join([base, *parts[2:]])
+
+    # Mandatory/<operation>/<subcategory> keeps the subcategory but removes
+    # the source-only operation wrapper.
+    operation = "bet and settle" if base.endswith("Bet and Settle") else "cancel bet"
+    if len(lowered) >= 3 and lowered[0] == "mandatory" and lowered[1] == operation:
+        return " > ".join([base, *parts[2:]])
+    return base
 
 
 def _behavior_module(output_section: str, reference_case: dict[str, Any]) -> str:
