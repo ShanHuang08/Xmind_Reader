@@ -391,7 +391,7 @@ Category to generated XMind section mapping:
 | `balance` | `User Behavior > Get Player balance` |
 | `bet` | `User Behavior > Bet and Settle` |
 | `settlement` | `User Behavior > Bet and Settle` |
-| `amount_precision` | `User Behavior > Bet and Settle` |
+| `amount_precision` | `API parameter test` |
 | `multiple_bets` | `User Behavior > Bet and Settle` |
 | `multiple_bets_one_bet_endpoint` | `User Behavior > Bet and Settle` |
 | `multiple_bets_two_bet_endpoint` | `User Behavior > Bet and Settle` |
@@ -410,12 +410,11 @@ Category to generated XMind section mapping:
 | `rollback_bet_and_settle` / `rollback_betandsettle` | `User Behavior > Cancel Bet` |
 | `freespin` | `User Behavior > Bet and Settle` |
 | `jackpot` | `User Behavior > Bet and Settle` |
-| `slots` | `User Behavior > Game type > Slots` |
-| `arcade_game` | `User Behavior > Game type > Arcade game` |
-| `mini_game` | `User Behavior > Game type > Mini game` |
-| `crash_game` | `User Behavior > Game type > Crash game` |
+| `slots` / `slot_game` | `User Behavior > Bet and Settle` |
+| `arcade_game` / `mini_game` / `crash_game` | `User Behavior > Bet and Settle` |
+| `live_game` / `instant_win` / `poker_game` / `table_game` / `video_bingo` | `User Behavior > Bet and Settle` |
 
-This mapping should also be written into `draft_test_cases.json` as `generation_mapping`, so Codex can read it before generating any cases.
+This category mapping is written into `draft_test_cases.json` as `generation_mapping`. The final canonical leaf is selected by `user_behavior_mapping.py` from source module/path: Game category, Main flow, Bet config, Settle config, BetAndSettle config, Special accounts, Player / Game status, Cancel config, or Cancel Main flow. Cases may not stop at the Bet and Settle or Cancel Bet parent.
 
 ## Step 2: Test Case Generator
 
@@ -430,7 +429,7 @@ Current implemented scope:
 - Preconditions prefer `endpoint.request_example`; otherwise the generator derives normal values from parameter name, type, and description.
 - Remarks prefer `endpoint.success_response_example` and `endpoint.error_response_example`.
 - Step expected results include a parameter validation error message and an error response JSON block.
-- Special API parameter scopes include amount precision/value cases, timestamp shorter value, string space for `userId`/`roundId`, integer value for `roundDetails`, and uppercase input for player-name-related parameters such as `userId`, `username`, `playerId`, `playerName`, `memberId`, and `accountId`.
+- Special API parameter scopes include amount precision/value cases, timestamp shorter value, string space for `userId`/`roundId`, integer value for `roundDetails`, and uppercase input for player-name-related parameters such as `userId`, `username`, `playerId`, `playerName`, `memberId`, and `accountId`. Amount decimal limits come from explicit Confluence parameter text; if absent, `max_decimal=8`. Every amount case includes a valid `max_decimal` step and an invalid `max_decimal+1` step.
 - User Behavior generation is still pending and should be driven by scenario templates/reference cases.
 
 The generator should let Codex read:
@@ -1009,8 +1008,12 @@ User Behavior generation is now partially implemented and runs together with API
 Implemented:
 
 - Loads reference cases from `xmind_detail/User_Behavior_map/modules`.
-- Routes generated cases into QA-facing sections such as `User Behavior > Launch Game`, `User Behavior > Bet and Settle`, `User Behavior > Cancel Bet`, `User Behavior > Get Player balance`, and `User Behavior > Game type`.
-- Selects game-type cases from vendor doc game-code tables, including slot, live/casino, and arcade game types.
+- Routes generated cases through the centralized `user_behavior_mapping.py` contract. Bet/Cancel cases always land on canonical leaves; root-level `User Behavior > Game type` and legacy `Jackpot / FreeSpin`, `Adjustment`, `Vendor specific cases` branches are rejected.
+- Maps the seven `User_Behavior_map` Game category modules below `User Behavior > Bet and Settle > Game type > Game category` and maps behavior flows below `Game type > Main flow`.
+- Selects Game category modules from the individual checked inline tasks in Confluence `Vendor Master Check List > Game Type`. The doc reader exports `available_values` and `selected_values`; checked values override game-code inference, so unchecked game types are never added by fuzzy matching.
+- Keeps combined-controller config cases in the dedicated `User Behavior > Bet and Settle > BetAndSettle config` branch. The writer creates this branch only when at least one corresponding case exists; it does not emit an empty branch.
+- Records source module/path, mapping rule id and mapping status on generated cases, and writes a 203-case inventory accounting report for the current reference map.
+- Provider/game coverage is deferred until Confluence supplies explicit provider/category/game-code mappings.
 - Uses endpoint role mapping to attach vendor endpoints and remarks to reference cases.
 - Uses the same endpoint precondition and remarks style as API Parameter cases for non-launch User Behavior cases.
 - Dedicated launch-game cases keep the launch request template while replacing vendor-specific `username` and `gameCode`.

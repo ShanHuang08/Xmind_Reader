@@ -743,7 +743,7 @@ def _safe_name(value: str) -> str:
 
 def _relative(path: Path, repo_root: Path) -> str:
     try:
-        return str(path.relative_to(repo_root))
+        return path.relative_to(repo_root).as_posix()
     except ValueError:
         return str(path)
 

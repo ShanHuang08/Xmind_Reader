@@ -434,7 +434,7 @@ xmind_detail/scenario_templates/   ← 資料夾已建立，等待 XMind 完成
 
 XMind 結構分為兩層：
 
-- **Mandatory**：不管 vendor capability 為何都要產生的必要測項（launch game、balance、bet、settlement、rollback、amount precision）
+- **Mandatory**：不管 vendor capability 為何都要產生的必要測項（launch game、balance、bet、settlement、rollback）。Amount precision 屬於 `API parameter test`，不進入 User Behavior。
 - **Conditional Mandatory**：屬於必要測項，但必須先由 API doc 形態判斷是否可套用。例如 `BetAndSettle` 只有在偵測到 combined bet-and-settlement endpoint 時才選入，最後仍放在 `User Behavior > Bet and Settle`。
 - **Capability: xxx**：先依 `capability_profile.supports[xxx]` 決定是否選入，再依 `endpoint_analysis` 選擇正確分支（multiple_bets、multiple_settlements、rollback_settlements、cancel_bet、jackpot、idempotency 等）。`jackpot` 與 `free_spin` 只要 vendor capability 宣告支援就載入；即使 capability 未標記，`free_spin_control` parameter semantics 仍可補選 FreeSpin cases。
 
@@ -450,26 +450,32 @@ endpoint_roles + request_parameters
 目前已定義的分支：
 
 - `Authenticate`：conditional mandatory。只要 `endpoint_analysis.endpoint_topology.authenticate.mode = endpoint_present`，就抽 `Authenticate > Mandatory > test cases` 底下所有案例。
-  - `Authentication is necessary`：只有 API doc 確認 authenticate 是必要的，且沒 call 會回 unauthenticated / unauthorized / invalid token / missing session 類錯誤時才抽。目前案例 title 是 `Bet without authenticate`，先強制放到 `User Behavior > Bet and Settle`。
+  - `Authentication is necessary`：只有 API doc 確認 authenticate 是必要的，且沒 call 會回 unauthenticated / unauthorized / invalid token / missing session 類錯誤時才抽；輸出到 `User Behavior > Bet and Settle > Bet config`。
 - `BetAndSettle`：conditional mandatory。只有 `endpoint_analysis.endpoint_topology.bet_and_settle.mode = combined_endpoint` 時才抽。
   - `has_round_end_control_parameter`：combined endpoint 有 round-end control parameter。
   - `no_round_end_control_parameter`：目前用不到，先不抽。
+  - Source leaf 為 `BetAndSettle config` 時固定輸出到 `User Behavior > Bet and Settle > BetAndSettle config`，不拆成 Bet config 或 Settle config。
 - `multiple_bets`
   - `one_bet_endpoint`：同一個 bet endpoint，可能靠 action/method parameter 控制；User_Behavior_map 結構為 `Multiple Bets > one_bet_endpoint > test cases`。
   - `two_bet_endpoint`：兩個分開的 bet-like endpoints，例如 Bet / Rebet；User_Behavior_map 結構為 `Multiple Bets > two_bet_endpoint > test cases`。
 - `multiple_settlements`
   - `has_round_end_control_parameter`：settlement/result endpoint 有 round-end control parameter。
   - `no_round_end_control_parameter`：沒有 round-end control parameter，測項重點改看 transfer posting、balance change、idempotency / duplicate behavior。
-- `Jackpot / FreeSpin`：`FreeSpin` 與 `settle_by_round > jackpot` 參考案例統一輸出到 `User Behavior > Bet and Settle > Jackpot / FreeSpin`。
-- `Adjustment`：`modify_settlement_adjustment` 參考案例依來源 module 分流到 `User Behavior > Bet and Settle > Adjustment` 或 `User Behavior > Cancel Bet > Adjustment`。
-- 以上三個輸出節點會由 XMind writer 預先建立，即使當前 vendor 沒有選中案例也會保留空節點。Parameter title 的 freespin/jackpot/adjust 推導預留擴充入口，目前 API parameter cases 仍維持原分類。
+- `FreeSpin`、jackpot、adjustment success 與 multiple-flow success 統一輸出到 `User Behavior > Bet and Settle > Game type > Main flow`。
+- Bet、Settle、combined BetAndSettle 與 Cancel/rollback 的 config cases 分別輸出到 `Bet config`、`Settle config`、`BetAndSettle config`、`Cancel config`。
+- `Special accounts`、`Player / Game status` 優先依 source path leaf 路由；title keyword 只作舊資料 fallback。
+- XMind writer 會預建 canonical tree；`BetAndSettle config` 採資料驅動，只有存在對應 cases 才建立，沒有資料時不輸出空節點。舊的 `Jackpot / FreeSpin`、`Adjustment`、`Vendor specific cases` 不再輸出。
 - `Special test cases`：預留給未來擴充，目前 selector 會跳過，不會抽取或生成。
 
 目前已實作：
 
 - Mandatory / conditional mandatory 參考案例選取。
-- Launch Game、Bet and Settle、Cancel Bet、Get Player balance、Game type 等輸出 section。
-- Game type 依 doc 的 game-code table 抽出 slot、live/casino、arcade 類型。
+- Launch Game、Get Player balance，以及 Bet and Settle／Cancel Bet 下完整 canonical leaf sections。
+- Game category cases 來自 `xmind_detail/User_Behavior_map` 的 Instant Win、Live game、Mini game、Poker game、Slot game、Table game、Video Bingo modules。
+- Game category selection 以 Confluence `Vendor Master Check List > Game Type` 內每個 inline task 的 checked 狀態為準；reader 會保存 `available_values` 與 `selected_values`，未勾選項目不會因 game-code 字串而被加入。只有舊 detail 尚未包含 per-item checkbox metadata 時才 fallback 到 game-code table。
+- Provider/game coverage 必須有 Confluence 明確 mapping；目前保留需求但不開發、不猜測 provider。
+- 每筆生成的 User Behavior case 記錄 source module/path、mapping rule id 與 mapping status；inventory 對所有 source cases 做 mapped/excluded/unmapped accounting。
+- Amount parameters 先從 Confluence 明確 decimal range 取得 `max_decimal`；找不到時預設 8，並同時生成 8 位成功與 9 位失敗邊界 steps。
 - 非專門 Launch Game 的 User Behavior remarks / preconditions 使用和 API Parameter test 相同的 endpoint doc example。
 - Dedicated Launch Game cases 保留 launch request template，但會替換 `username` 和 `gameCode`。
 

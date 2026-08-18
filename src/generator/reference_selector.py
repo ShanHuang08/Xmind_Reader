@@ -13,7 +13,6 @@ MANDATORY_CATEGORIES = {
     "bet",
     "settlement",
     "rollback",
-    "amount_precision",
 }
 
 CONDITIONAL_MANDATORY_CATEGORY_RULES = {

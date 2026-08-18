@@ -24,6 +24,13 @@ try:
         SCHEMA_VERSION,
     )
     from generator.user_behavior_text_normalizer import debit_credit_output_section_aliases
+    from generator.user_behavior_mapping import (
+        LEGACY_FORBIDDEN_BRANCHES,
+        MAPPING_CONTRACT_VERSION,
+        MAPPING_RULE_IDS,
+        canonicalize_output_section_alias,
+        is_allowed_user_behavior_output_section,
+    )
 except ModuleNotFoundError:  # pragma: no cover - supports python -m src.generator...
     from .draft_schema import (
         ALLOWED_OUTPUT_SECTIONS,
@@ -40,6 +47,13 @@ except ModuleNotFoundError:  # pragma: no cover - supports python -m src.generat
         SCHEMA_VERSION,
     )
     from .user_behavior_text_normalizer import debit_credit_output_section_aliases
+    from .user_behavior_mapping import (
+        LEGACY_FORBIDDEN_BRANCHES,
+        MAPPING_CONTRACT_VERSION,
+        MAPPING_RULE_IDS,
+        canonicalize_output_section_alias,
+        is_allowed_user_behavior_output_section,
+    )
 
 
 @dataclass(frozen=True)
@@ -151,6 +165,25 @@ def _validate_root(
                 )
             )
 
+    mapping_report = draft.get("user_behavior_mapping_report")
+    if isinstance(mapping_report, dict):
+        total = mapping_report.get("total_cases")
+        accounted = mapping_report.get("accounted")
+        if total != accounted:
+            errors.append(
+                _error(
+                    "$.user_behavior_mapping_report.accounted",
+                    f"Expected all {total!r} source cases to be accounted, got {accounted!r}.",
+                )
+            )
+        if mapping_report.get("contract_version") != MAPPING_CONTRACT_VERSION:
+            errors.append(
+                _error(
+                    "$.user_behavior_mapping_report.contract_version",
+                    f"Expected {MAPPING_CONTRACT_VERSION!r}.",
+                )
+            )
+
 
 def _validate_test_cases(
     test_cases: list[Any], errors: list[ValidationIssue], warnings: list[ValidationIssue]
@@ -185,7 +218,7 @@ def _validate_test_cases(
         _validate_steps(test_case, path, errors)
         _validate_simplified_case_labels(test_case, path, warnings)
         _validate_expected_error(test_case, path, errors, warnings)
-        _validate_source_reference(test_case, path, warnings)
+        _validate_source_reference(test_case, path, errors, warnings)
 
 
 def _validate_output_section(
@@ -193,24 +226,30 @@ def _validate_output_section(
 ) -> None:
     output_section = test_case.get("output_section", "")
     category = test_case.get("category", "")
-    is_allowed_descendant = any(
-        output_section.startswith(f"{parent} > ")
-        for parent in ALLOWED_OUTPUT_SECTIONS
-        if parent.startswith("User Behavior >")
+    is_user_behavior = str(output_section).startswith("User Behavior >")
+    is_allowed = (
+        output_section in ALLOWED_OUTPUT_SECTIONS
+        or (is_user_behavior and is_allowed_user_behavior_output_section(str(output_section)))
     )
-    if output_section and output_section not in ALLOWED_OUTPUT_SECTIONS and not is_allowed_descendant:
+    if output_section and not is_allowed:
+        legacy = next(
+            (branch for branch in LEGACY_FORBIDDEN_BRANCHES if branch in str(output_section)),
+            "",
+        )
+        suffix = f" Legacy branch {legacy!r} is not allowed." if legacy else ""
         errors.append(
             _error(
                 f"{path}.output_section",
-                f"Unknown output_section {output_section!r}.",
+                f"Unknown or non-canonical output_section {output_section!r}.{suffix}",
             )
         )
 
     expected_section = KNOWLEDGE_CATEGORY_TO_XMIND_SECTION.get(category)
     allowed_aliases = debit_credit_output_section_aliases().get(expected_section, set())
+    canonical_output = canonicalize_output_section_alias(str(output_section))
     is_expected_descendant = bool(
         expected_section
-        and output_section.startswith(f"{expected_section} > ")
+        and canonical_output.startswith(f"{expected_section} > ")
     )
     is_alias_descendant = any(
         output_section.startswith(f"{alias} > ") for alias in allowed_aliases
@@ -218,7 +257,8 @@ def _validate_output_section(
     if (
         expected_section
         and output_section
-        and output_section not in {expected_section, *allowed_aliases}
+        and canonical_output != expected_section
+        and output_section not in allowed_aliases
         and not is_expected_descendant
         and not is_alias_descendant
     ):
@@ -433,7 +473,10 @@ def _validate_expected_error(
 
 
 def _validate_source_reference(
-    test_case: dict[str, Any], path: str, warnings: list[ValidationIssue]
+    test_case: dict[str, Any],
+    path: str,
+    errors: list[ValidationIssue],
+    warnings: list[ValidationIssue],
 ) -> None:
     source_reference = test_case.get("source_reference")
     if _is_empty(source_reference):
@@ -446,6 +489,32 @@ def _validate_source_reference(
         return
     if not isinstance(source_reference, dict):
         warnings.append(_warning(f"{path}.source_reference", "source_reference should be an object."))
+        return
+    if source_reference.get("generated_by") != "user-behavior-reference-generator/v1":
+        return
+    for field in ("source_module", "source_path", "mapping_rule_id", "mapping_status"):
+        if _is_empty(source_reference.get(field)):
+            errors.append(
+                _error(
+                    f"{path}.source_reference.{field}",
+                    "Generated User Behavior cases require mapping traceability.",
+                )
+            )
+    rule_id = str(source_reference.get("mapping_rule_id", ""))
+    if rule_id and rule_id not in MAPPING_RULE_IDS:
+        errors.append(
+            _error(
+                f"{path}.source_reference.mapping_rule_id",
+                f"Unknown User Behavior mapping rule {rule_id!r}.",
+            )
+        )
+    if source_reference.get("mapping_status") not in {None, "mapped"}:
+        errors.append(
+            _error(
+                f"{path}.source_reference.mapping_status",
+                "Only mapped User Behavior cases may enter the draft.",
+            )
+        )
 
 
 def _looks_negative(test_case: dict[str, Any]) -> bool:

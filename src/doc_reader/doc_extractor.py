@@ -955,8 +955,9 @@ def _capability_profile(
 
 def _extract_vendor_master_checklist(parsed: dict[str, Any]) -> list[dict[str, Any]]:
     tables = parsed.get("tables", [])
+    detailed_tables = parsed.get("tables_detailed", [])
     output = []
-    for table in tables:
+    for table_index, table in enumerate(tables):
         if not table:
             continue
         headers = [_normalize_header(cell) for cell in table[0]]
@@ -966,7 +967,7 @@ def _extract_vendor_master_checklist(parsed: dict[str, Any]) -> list[dict[str, A
         description_index = headers.index("description") if "description" in headers else None
         remark_index = headers.index("remark") if "remark" in headers else None
         enable_index = next(index for index, header in enumerate(headers) if "enable" in header)
-        for row in table[1:]:
+        for row_index, row in enumerate(table[1:], start=1):
             if len(row) <= max(name_index, enable_index):
                 continue
             name = row[name_index].strip()
@@ -978,20 +979,48 @@ def _extract_vendor_master_checklist(parsed: dict[str, Any]) -> list[dict[str, A
             ):
                 continue
             enabled = _enabled_value(row[enable_index] if len(row) > enable_index else "")
-            output.append(
-                {
-                    "name": name,
-                    "description": row[description_index].strip()
-                    if description_index is not None and len(row) > description_index
-                    else "",
-                    "remark": row[remark_index].strip()
-                    if remark_index is not None and len(row) > remark_index
-                    else "",
-                    "enabled": enabled,
-                    "capability_key": CHECKLIST_CAPABILITY_MAP.get(name, ""),
-                }
+            item = {
+                "name": name,
+                "description": row[description_index].strip()
+                if description_index is not None and len(row) > description_index
+                else "",
+                "remark": row[remark_index].strip()
+                if remark_index is not None and len(row) > remark_index
+                else "",
+                "enabled": enabled,
+                "capability_key": CHECKLIST_CAPABILITY_MAP.get(name, ""),
+            }
+            tasks = _detailed_cell_tasks(
+                detailed_tables, table_index, row_index, enable_index
             )
+            available_values = [
+                str(task.get("text", "")).strip()
+                for task in tasks
+                if str(task.get("text", "")).strip()
+            ]
+            if available_values:
+                item["available_values"] = available_values
+                item["selected_values"] = [
+                    str(task.get("text", "")).strip()
+                    for task in tasks
+                    if task.get("checked") and str(task.get("text", "")).strip()
+                ]
+            output.append(item)
     return output
+
+
+def _detailed_cell_tasks(
+    detailed_tables: Any,
+    table_index: int,
+    row_index: int,
+    cell_index: int,
+) -> list[dict[str, Any]]:
+    try:
+        cell = detailed_tables[table_index][row_index][cell_index]
+    except (IndexError, KeyError, TypeError):
+        return []
+    tasks = cell.get("tasks", []) if isinstance(cell, dict) else []
+    return [task for task in tasks if isinstance(task, dict)]
 
 
 def _extract_game_codes(parsed: dict[str, Any]) -> list[dict[str, str]]:

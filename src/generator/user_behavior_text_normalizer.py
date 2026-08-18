@@ -121,11 +121,11 @@ def _normalize_step(step: Any) -> Any:
 
 
 def _normalize_output_section(value: str) -> str:
-    if value == BET_SETTLE_SECTION:
-        return DEBIT_CREDIT_SECTION
-    if value == CANCEL_BET_SECTION:
-        return CANCEL_DEBIT_SECTION
-    return _normalize_text(value)
+    if value == BET_SETTLE_SECTION or value.startswith(f"{BET_SETTLE_SECTION} > "):
+        return DEBIT_CREDIT_SECTION + value[len(BET_SETTLE_SECTION) :]
+    if value == CANCEL_BET_SECTION or value.startswith(f"{CANCEL_BET_SECTION} > "):
+        return CANCEL_DEBIT_SECTION + value[len(CANCEL_BET_SECTION) :]
+    return value
 
 
 def _normalize_text(value: str) -> str:

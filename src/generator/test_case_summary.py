@@ -52,14 +52,15 @@ def render_test_case_summary(draft: dict[str, Any]) -> str:
         "",
         "## User Behavior 抽到的種類",
         "",
-        "| User_Behavior_map 分支 | Category | Output section | Count |",
-        "|---|---|---|---:|",
+        "| User_Behavior_map module/path | Mapping rule | Category | Output section | Count |",
+        "|---|---|---|---|---:|",
     ]
 
     for row in _user_behavior_rows(user_behavior_cases):
         lines.append(
-            "| {source_path} | {category} | {output_section} | {count} |".format(
-                source_path=_escape_cell(row["source_path"]),
+            "| {source} | {mapping_rule} | {category} | {output_section} | {count} |".format(
+                source=_escape_cell(f"{row['source_module']} / {row['source_path']}"),
+                mapping_rule=_escape_cell(row["mapping_rule"]),
                 category=_escape_cell(row["category"]),
                 output_section=_escape_cell(row["output_section"]),
                 count=row["count"],
@@ -75,20 +76,25 @@ def render_test_case_summary(draft: dict[str, Any]) -> str:
 
 
 def _user_behavior_rows(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    counter: Counter[tuple[str, str, str]] = Counter()
+    counter: Counter[tuple[str, str, str, str, str]] = Counter()
     for case in cases:
-        source_path = str(case.get("source_reference", {}).get("source_path", ""))
+        source_reference = case.get("source_reference", {})
+        source_module = str(source_reference.get("source_module", ""))
+        source_path = str(source_reference.get("source_path", ""))
+        mapping_rule = str(source_reference.get("mapping_rule_id", ""))
         category = str(case.get("category", ""))
         output_section = str(case.get("output_section", ""))
-        counter[(source_path, category, output_section)] += 1
+        counter[(source_module, source_path, mapping_rule, category, output_section)] += 1
     return [
         {
+            "source_module": source_module,
             "source_path": source_path,
+            "mapping_rule": mapping_rule,
             "category": category,
             "output_section": output_section,
             "count": count,
         }
-        for (source_path, category, output_section), count in counter.most_common()
+        for (source_module, source_path, mapping_rule, category, output_section), count in counter.most_common()
     ]
 
 
@@ -121,6 +127,17 @@ def _analysis_lines(
         lines.append("- 偵測到 FreeSpin 相關參數，因此有抽 FreeSpin 測項。")
     if semantics.get("round_end_control"):
         lines.append("- 偵測到 round-end control 參數，因此抽 Has round-end control parameter 分支。")
+    mapping_report = draft.get("user_behavior_mapping_report", {})
+    if isinstance(mapping_report, dict) and mapping_report:
+        lines.append(
+            "- User_Behavior_map inventory: total={total}, mapped={mapped}, "
+            "excluded={excluded}, unmapped={unmapped}.".format(
+                total=mapping_report.get("total_cases", 0),
+                mapped=mapping_report.get("mapped", 0),
+                excluded=mapping_report.get("excluded", 0),
+                unmapped=mapping_report.get("unmapped", 0),
+            )
+        )
     return lines
 
 

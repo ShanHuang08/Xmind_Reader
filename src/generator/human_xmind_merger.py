@@ -589,7 +589,7 @@ def _output_section_from_module_path(module_path: str) -> str:
         return API_PARAMETER_TEST_SECTION
     if "User Behavior" in parts:
         index = parts.index("User Behavior")
-        return " > ".join(parts[index : min(len(parts), index + 3)])
+        return " > ".join(parts[index:])
     return " > ".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else "Human Added")
 
 

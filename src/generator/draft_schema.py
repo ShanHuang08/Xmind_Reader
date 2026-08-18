@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from generator.user_behavior_mapping import (
+    CANONICAL_USER_BEHAVIOR_LEAF_SECTIONS,
+    KNOWLEDGE_CATEGORY_TO_XMIND_SECTION,
+)
+
 
 SCHEMA_VERSION = "draft-test-cases/v1"
 
@@ -54,56 +59,7 @@ API_PARAMETER_TEST_CONTRACT = {
 
 ALLOWED_OUTPUT_SECTIONS = {
     "API parameter test",
-    "User Behavior > Launch Game",
-    "User Behavior > Get Player balance",
-    "User Behavior > Bet and Settle",
-    "User Behavior > Debit and Credit",
-    "User Behavior > Cancel Bet",
-    "User Behavior > Cancel Debit",
-    "User Behavior > Game type > Slot game",
-    "User Behavior > Game type > Arcade",
-    "User Behavior > Game type > Mini game",
-    "User Behavior > Game type > Live game",
-    "User Behavior > Game type > Video Bingo",
-}
-
-KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
-    "parameter_validation": "API parameter test",
-    "parameter_dependency_validation": "API parameter test",
-    "launch_game": "User Behavior > Launch Game",
-    "authenticate": "User Behavior > Launch Game",
-    "authentication_is_necessary": "User Behavior > Bet and Settle",
-    "balance": "User Behavior > Get Player balance",
-    "bet": "User Behavior > Bet and Settle",
-    "settlement": "User Behavior > Bet and Settle",
-    "amount_precision": "User Behavior > Bet and Settle",
-    "multiple_bets": "User Behavior > Bet and Settle",
-    "multiple_bets_one_bet_endpoint": "User Behavior > Bet and Settle",
-    "multiple_bets_two_bet_endpoint": "User Behavior > Bet and Settle",
-    "multiple_settlements": "User Behavior > Bet and Settle",
-    "multiple_settlements_has_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "multiple_settlements_no_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "modify_settlement_adjustment": "User Behavior > Bet and Settle",
-    "cancel_settlement_adjustment": "User Behavior > Cancel Bet",
-    "settle_by_round_or_settle_by_bet": "User Behavior > Bet and Settle",
-    "bet_and_settle": "User Behavior > Bet and Settle",
-    "bet_and_settle_has_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "betandsettle": "User Behavior > Bet and Settle",
-    "idempotency": "User Behavior > Bet and Settle",
-    "rollback": "User Behavior > Cancel Bet",
-    "rollback_bet": "User Behavior > Cancel Bet",
-    "rollback_settled_bet": "User Behavior > Cancel Bet",
-    "rollback_by_round_or_rollback_by_bet": "User Behavior > Cancel Bet",
-    "rollback_bet_and_settle": "User Behavior > Cancel Bet",
-    "rollback_betandsettle": "User Behavior > Cancel Bet",
-    "freespin": "User Behavior > Bet and Settle",
-    "jackpot": "User Behavior > Bet and Settle",
-    "slots": "User Behavior > Game type > Slot game",
-    "slot_game": "User Behavior > Game type > Slot game",
-    "arcade_game": "User Behavior > Game type > Arcade",
-    "live_game": "User Behavior > Game type > Live game",
-    "mini_game": "User Behavior > Game type > Mini game",
-    "crash_game": "User Behavior > Game type > Crash game",
+    *CANONICAL_USER_BEHAVIOR_LEAF_SECTIONS,
 }
 
 CAPABILITY_CATEGORY_VARIANTS = {

@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from generator.endpoint_analyzer import analyze_endpoint_topology
+from generator.user_behavior_mapping import (
+    GENERATED_XMIND_STRUCTURE,
+    KNOWLEDGE_CATEGORY_TO_XMIND_SECTION,
+    MAPPING_CONTRACT_VERSION,
+)
 
 
 FALLBACK_GAME_CODES = {
@@ -35,87 +40,6 @@ ENDPOINT_ROLE_RULES = {
     "cancel": "cancel_bet",
     "rollback": "rollback",
     "endround": "balance_confirmation_only",
-}
-
-
-KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
-    "parameter_validation": "API parameter test",
-    "launch_game": "User Behavior > Launch Game",
-    "authenticate": "User Behavior > Launch Game",
-    "authentication_is_necessary": "User Behavior > Bet and Settle",
-    "balance": "User Behavior > Get Player balance",
-    "bet": "User Behavior > Bet and Settle",
-    "settlement": "User Behavior > Bet and Settle",
-    "amount_precision": "User Behavior > Bet and Settle",
-    "multiple_bets": "User Behavior > Bet and Settle",
-    "multiple_bets_one_bet_endpoint": "User Behavior > Bet and Settle",
-    "multiple_bets_two_bet_endpoint": "User Behavior > Bet and Settle",
-    "multiple_settlements": "User Behavior > Bet and Settle",
-    "multiple_settlements_has_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "multiple_settlements_no_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "modify_settlement_adjustment": "User Behavior > Bet and Settle",
-    "cancel_settlement_adjustment": "User Behavior > Cancel Bet",
-    "settle_by_round_or_settle_by_bet": "User Behavior > Bet and Settle",
-    "bet_and_settle": "User Behavior > Bet and Settle",
-    "bet_and_settle_has_round_end_control_parameter": "User Behavior > Bet and Settle",
-    "betandsettle": "User Behavior > Bet and Settle",
-    "idempotency": "User Behavior > Bet and Settle",
-    "rollback": "User Behavior > Cancel Bet",
-    "rollback_bet": "User Behavior > Cancel Bet",
-    "rollback_settled_bet": "User Behavior > Cancel Bet",
-    "rollback_by_round_or_rollback_by_bet": "User Behavior > Cancel Bet",
-    "rollback_bet_and_settle": "User Behavior > Cancel Bet",
-    "rollback_betandsettle": "User Behavior > Cancel Bet",
-    "freespin": "User Behavior > Bet and Settle",
-    "jackpot": "User Behavior > Bet and Settle",
-    "slots": "User Behavior > Game type > Slot game",
-    "slot_game": "User Behavior > Game type > Slot game",
-    "arcade_game": "User Behavior > Game type > Arcade",
-    "live_game": "User Behavior > Game type > Live game",
-    "mini_game": "User Behavior > Game type > Mini game",
-    "crash_game": "User Behavior > Game type > Crash game",
-}
-
-
-GENERATED_XMIND_STRUCTURE = {
-    "API parameter test": {
-        "description": "Parameter validation cases are grouped by endpoint, then by parameter.",
-        "children": ["<endpoint>", "<parameter>"],
-    },
-    "User Behavior": {
-        "description": "Business-flow cases are grouped by QA-facing behavior section.",
-        "children": {
-            "Launch Game": "Launch URL and authenticate-related cases.",
-            "Get Player balance": "Balance endpoint cases.",
-            "Bet and Settle": {
-                "description": "Bet, settlement, and BetAndSettle cases.",
-                "children": [
-                    "Positive cases",
-                    "Negative cases",
-                    "Player / Game status",
-                    "Special accounts",
-                    "Bet Duplicate",
-                    "Settle Duplicate",
-                    "Jackpot / FreeSpin",
-                    "Adjustment",
-                    "Vendor specific cases",
-                ],
-            },
-            "Cancel Bet": {
-                "description": "Cancel and rollback cases.",
-                "children": [
-                    "Positive cases",
-                    "Negative cases",
-                    "Player / Game status",
-                    "Special accounts",
-                    "Rollback Duplicate",
-                    "Adjustment",
-                    "Vendor specific cases",
-                ],
-            },
-            "Game type": "Game front-end cases grouped by game type, such as Slots, Arcade game, Mini game, and Crash game.",
-        },
-    },
 }
 
 
@@ -325,6 +249,7 @@ def _case_authoring_rules(
 
 def _generation_mapping() -> dict[str, Any]:
     return {
+        "mapping_contract_version": MAPPING_CONTRACT_VERSION,
         "strategy": (
             "Use category/capability to select reference knowledge, then use output_section "
             "to place generated cases into the fixed XMind structure."
@@ -343,7 +268,6 @@ def _generation_mapping() -> dict[str, Any]:
             "bet",
             "settlement",
             "rollback",
-            "amount_precision",
         ],
         "conditional_mandatory_user_behavior_categories": [
             {

@@ -2,10 +2,46 @@ from __future__ import annotations
 
 import unittest
 
-from doc_reader.doc_extractor import extract_vendor_detail
+from doc_reader.doc_extractor import (
+    _extract_vendor_master_checklist,
+    extract_vendor_detail,
+)
 
 
 class DocExtractorTests(unittest.TestCase):
+    def test_checklist_preserves_selected_confluence_task_values(self) -> None:
+        parsed = {
+            "tables": [
+                [
+                    ["Name", "Description", "Remark", "enable"],
+                    ["Game Type", "有哪些類型遊戲", "", "checked"],
+                ]
+            ],
+            "tables_detailed": [
+                [
+                    [{"text": "Name"}, {"text": "Description"}, {"text": "Remark"}, {"text": "enable"}],
+                    [
+                        {"text": "Game Type"},
+                        {"text": "有哪些類型遊戲"},
+                        {"text": ""},
+                        {
+                            "text": "Slot Game\nLive Game\nVideo Bingo",
+                            "tasks": [
+                                {"text": "Slot Game", "checked": True},
+                                {"text": "Live Game", "checked": False},
+                                {"text": "Video Bingo", "checked": True},
+                            ],
+                        },
+                    ],
+                ]
+            ],
+        }
+
+        checklist = _extract_vendor_master_checklist(parsed)
+
+        self.assertEqual(checklist[0]["available_values"], ["Slot Game", "Live Game", "Video Bingo"])
+        self.assertEqual(checklist[0]["selected_values"], ["Slot Game", "Video Bingo"])
+
     def test_h2_query_operations_become_variants_with_xml_responses(self) -> None:
         request_table = [
             ["Parameter", "Type", "Require", "Description"],

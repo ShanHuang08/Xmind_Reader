@@ -14,6 +14,11 @@ from generator.draft_schema import (
     XMIND_CASE_FIELD_LABELS,
 )
 from generator.draft_validator import validate_draft
+from generator.user_behavior_mapping import (
+    BET_AND_SETTLE_CONFIG_SECTION,
+    BET_SETTLE_GAME_CATEGORY,
+    GAME_CATEGORY_MODULES,
+)
 
 
 def write_xmind_from_draft(
@@ -87,9 +92,10 @@ def _build_sheet(draft: dict[str, Any], show_case_id: bool = False) -> dict[str,
     regression = _ensure_child(root, "Regression")
     vendor_integration = _ensure_child(regression, "Vendor_integration")
     vendor_topic = _ensure_child(vendor_integration, vendor)
-    _ensure_fixed_user_behavior_categories(vendor_topic)
+    test_cases = draft.get("test_cases", [])
+    _ensure_fixed_user_behavior_categories(vendor_topic, test_cases)
 
-    for case in draft.get("test_cases", []):
+    for case in test_cases:
         if not isinstance(case, dict):
             continue
         _place_case(vendor_topic, case, show_case_id=show_case_id)
@@ -102,14 +108,62 @@ def _build_sheet(draft: dict[str, Any], show_case_id: bool = False) -> dict[str,
     }
 
 
-def _ensure_fixed_user_behavior_categories(vendor_topic: dict[str, Any]) -> None:
-    """Create capability branches even when this vendor selects no cases."""
+def _ensure_fixed_user_behavior_categories(
+    vendor_topic: dict[str, Any], test_cases: Any = None
+) -> None:
+    """Create fixed branches, omitting an empty BetAndSettle config branch."""
     user_behavior = _ensure_child(vendor_topic, "User Behavior")
     bet_and_settle = _ensure_child(user_behavior, "Bet and Settle")
-    _ensure_child(bet_and_settle, "Jackpot / FreeSpin")
-    _ensure_child(bet_and_settle, "Adjustment")
+    game_type = _ensure_child(bet_and_settle, "Game type")
+    selected_game_categories = _selected_game_category_titles(test_cases)
+    if selected_game_categories:
+        game_category = _ensure_child(game_type, "Game category")
+        for title in selected_game_categories:
+            _ensure_child(game_category, title)
+    _ensure_child(game_type, "Main flow")
+    bet_and_settle_children = ["Bet config", "Settle config"]
+    if _has_bet_and_settle_config_cases(test_cases):
+        bet_and_settle_children.append("BetAndSettle config")
+    bet_and_settle_children.extend(["Special accounts", "Player / Game status"])
+    for title in bet_and_settle_children:
+        _ensure_child(bet_and_settle, title)
     cancel_bet = _ensure_child(user_behavior, "Cancel Bet")
-    _ensure_child(cancel_bet, "Adjustment")
+    for title in (
+        "Main flow",
+        "Cancel config",
+        "Special accounts",
+        "Player / Game status",
+    ):
+        _ensure_child(cancel_bet, title)
+
+
+def _has_bet_and_settle_config_cases(test_cases: Any) -> bool:
+    if not isinstance(test_cases, list):
+        return False
+    return any(
+        isinstance(case, dict)
+        and (
+            str(case.get("output_section", "")) == BET_AND_SETTLE_CONFIG_SECTION
+            or str(case.get("output_section", "")).endswith(
+                " > BetAndSettle config"
+            )
+        )
+        for case in test_cases
+    )
+
+
+def _selected_game_category_titles(test_cases: Any) -> list[str]:
+    """Return only Game category branches that contain generated cases."""
+    if not isinstance(test_cases, list):
+        return []
+    prefix = f"{BET_SETTLE_GAME_CATEGORY} > "
+    selected = {
+        str(case.get("output_section", ""))[len(prefix) :].strip()
+        for case in test_cases
+        if isinstance(case, dict)
+        and str(case.get("output_section", "")).startswith(prefix)
+    }
+    return [title for title in GAME_CATEGORY_MODULES.values() if title in selected]
 
 
 def _place_case(vendor_topic: dict[str, Any], case: dict[str, Any], show_case_id: bool = False) -> None:

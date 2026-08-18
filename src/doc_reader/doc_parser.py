@@ -138,12 +138,14 @@ def _parse_html_document(path: Path, html_text: str) -> dict[str, Any]:
             detailed_cells = []
             for cell in row.xpath("./th|./td"):
                 text = _clean_table_cell(cell)
-                checkbox = _checkbox_state(cell)
+                tasks = _checkbox_tasks(cell)
+                checkbox = _checkbox_state(tasks)
                 cells.append(text if checkbox is None else checkbox)
                 detailed_cells.append(
                     {
                         "text": text,
                         "checkbox": checkbox,
+                        "tasks": tasks,
                         "tag": cell.tag.lower(),
                     }
                 )
@@ -202,16 +204,27 @@ def _clean_table_cell(cell: etree._Element) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
-def _checkbox_state(cell: etree._Element) -> str | None:
+def _checkbox_tasks(cell: etree._Element) -> list[dict[str, Any]]:
     task_items = cell.xpath(
-        ".//*[contains(concat(' ', normalize-space(@class), ' '), ' inline-task-list ')]//li"
-    )
-    task_items.extend(
-        cell.xpath(".//li[contains(concat(' ', normalize-space(@class), ' '), ' checked ')]")
+        ".//*[contains(concat(' ', normalize-space(@class), ' '), ' inline-task-list ')]/li"
     )
     if not task_items:
+        task_items = cell.xpath(
+            ".//li[contains(concat(' ', normalize-space(@class), ' '), ' checked ')]"
+        )
+    return [
+        {
+            "text": _clean_table_cell(item),
+            "checked": _has_class(item, "checked"),
+        }
+        for item in task_items
+    ]
+
+
+def _checkbox_state(tasks: list[dict[str, Any]]) -> str | None:
+    if not tasks:
         return None
-    return "checked" if any(_has_class(item, "checked") for item in task_items) else "unchecked"
+    return "checked" if any(task.get("checked") for task in tasks) else "unchecked"
 
 
 def _has_class(element: etree._Element, class_name: str) -> bool:

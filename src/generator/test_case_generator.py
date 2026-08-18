@@ -13,12 +13,19 @@ from generator.case_generation_context import build_generation_context, load_dra
 from generator.draft_schema import (
     API_PARAMETER_CASE_TITLE_TEMPLATE,
     API_PARAMETER_TEST_SECTION,
-    KNOWLEDGE_CATEGORY_TO_XMIND_SECTION,
     PRECONDITIONS_LABEL,
     REMARKS_LABEL,
 )
 from generator.draft_validator import validate_draft
 from generator.reference_selector import selected_categories, select_reference_files
+from generator.user_behavior_mapping import (
+    MAPPING_CONTRACT_VERSION,
+    PLAYER_GAME_STATUS_TITLE_PHRASES,
+    SPECIAL_ACCOUNT_TITLE_PHRASES,
+    build_user_behavior_mapping_report,
+    map_user_behavior_case,
+    path_contains_segments,
+)
 from generator.user_behavior_text_normalizer import normalize_user_behavior_debit_credit_terms
 from doc_reader.parameter_dependency import canonical_parameter_path
 
@@ -27,22 +34,20 @@ GENERATED_BY = "deterministic-parameter-generator/v1"
 USER_BEHAVIOR_GENERATED_BY = "user-behavior-reference-generator/v1"
 VENDOR_TEST_SCENARIO_GENERATED_BY = "vendor-test-scenario-import/v1"
 DEPENDENCY_GENERATED_BY = "parameter-dependency-generator/v1"
+DEFAULT_MAX_DECIMAL_PLACES = 8
 
-VENDOR_SPECIFIC_BEHAVIOR_CATEGORIES = {
-    "multiple_bets",
-    "multiple_bets_one_bet_endpoint",
-    "multiple_bets_two_bet_endpoint",
-    "multiple_settlements",
-    "multiple_settlements_has_round_end_control_parameter",
-    "multiple_settlements_no_round_end_control_parameter",
-    "bet_and_settle_has_round_end_control_parameter",
-    "modify_settlement_adjustment",
-    "cancel_settlement_adjustment",
-    "idempotency",
-    "freespin",
-    "jackpot",
-    "rollback_bet",
-    "rollback_settled_bet",
+CONFLUENCE_GAME_TYPE_CATEGORIES = {
+    "slot game": ("slot_game",),
+    "slots": ("slot_game",),
+    "mini game (instant win)": ("mini_game", "instant_win"),
+    "mini game": ("mini_game",),
+    "instant win": ("instant_win",),
+    "poker game": ("poker_game",),
+    "table game": ("table_game",),
+    "live game": ("live_game",),
+    "casino live": ("live_game",),
+    "arcade": ("arcade_game",),
+    "video bingo": ("video_bingo",),
 }
 
 UPPERCASE_ACTION_PARAMETER_VALUES = {
@@ -61,7 +66,6 @@ CATEGORY_OUTPUT_PRIORITY = [
     "balance",
     "bet",
     "settlement",
-    "amount_precision",
     "rollback",
     "authenticate",
     "authentication_is_necessary",
@@ -83,30 +87,11 @@ CATEGORY_OUTPUT_PRIORITY = [
     "live_game",
     "arcade_game",
     "mini_game",
+    "instant_win",
+    "poker_game",
+    "table_game",
+    "video_bingo",
 ]
-
-SPECIAL_ACCOUNT_TITLE_PHRASES = (
-    "timeout player",
-    "timeout user",
-    "error player",
-    "error user",
-    "result0 player",
-    "result0 user",
-    "refund0 player",
-    "refund0 user",
-    "cancel player",
-    "cancel user",
-    "delay10s player",
-    "delay10s user",
-)
-
-PLAYER_GAME_STATUS_TITLE_PHRASES = (
-    "game status is abnormal",
-    "player status is abnormal",
-    # Preserve routing for existing reference cases that contain this typo.
-    "game status is abnornal",
-    "player status is abnornal",
-)
 
 
 def generate_test_cases_for_draft(
@@ -126,6 +111,16 @@ def generate_test_cases_for_draft(
     categories = _merge_categories(categories, _game_type_categories(context))
     references = [str(path) for path in select_reference_files(xmind_detail_root, categories)]
     cases: list[dict[str, Any]] = []
+    draft["user_behavior_mapping_report"] = build_user_behavior_mapping_report(
+        xmind_detail_root
+    )
+    draft["user_behavior_source"] = {
+        "directory": str(Path(xmind_detail_root) / "User_Behavior_map"),
+        "xmind_sha256": draft["user_behavior_mapping_report"].get(
+            "source_xmind_sha256", ""
+        ),
+        "mapping_contract_version": MAPPING_CONTRACT_VERSION,
+    }
     user_behavior_cases = _user_behavior_cases(context, xmind_detail_root, categories)
     cases.extend(normalize_user_behavior_debit_credit_terms(context, user_behavior_cases))
 
@@ -201,6 +196,13 @@ def _sort_categories_for_output(categories: list[str]) -> list[str]:
 
 
 def _game_type_categories(context: dict[str, Any]) -> list[str]:
+    confluence_categories = _confluence_game_type_categories(context)
+    if confluence_categories is not None:
+        return sorted(confluence_categories)
+
+    # Backward compatibility for details generated before per-item Confluence
+    # checkbox states were exported. Once selected_values is present it is the
+    # authoritative source and this game-code inference is not used.
     categories = set()
     for item in context.get("game_codes", []):
         text = " ".join(
@@ -214,21 +216,35 @@ def _game_type_categories(context: dict[str, Any]) -> list[str]:
             categories.add("arcade_game")
         if "mini" in text or "crash" in text:
             categories.add("mini_game")
-    if _vendor_checklist_enabled(context, "Game Type"):
-        categories.add("mini_game")
+        if "instant" in text:
+            categories.add("instant_win")
+        if "poker" in text:
+            categories.add("poker_game")
+        if "table" in text:
+            categories.add("table_game")
+        if "bingo" in text:
+            categories.add("video_bingo")
     return sorted(categories)
 
 
-def _vendor_checklist_enabled(context: dict[str, Any], checklist_name: str) -> bool:
+def _confluence_game_type_categories(
+    context: dict[str, Any],
+) -> set[str] | None:
     profile = context.get("capability_profile", {})
-    target = checklist_name.strip().lower()
     for item in profile.get("vendor_master_checklist", []):
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name", "")).strip().lower()
-        if name == target and bool(item.get("enabled")):
-            return True
-    return False
+        if " ".join(str(item.get("name", "")).casefold().split()) != "game type":
+            continue
+        selected_values = item.get("selected_values")
+        if not isinstance(selected_values, list):
+            return None
+        categories: set[str] = set()
+        for value in selected_values:
+            normalized = " ".join(str(value).casefold().split())
+            categories.update(CONFLUENCE_GAME_TYPE_CATEGORIES.get(normalized, ()))
+        return categories
+    return None
 
 
 def _user_behavior_cases(
@@ -255,9 +271,11 @@ def _user_behavior_cases(
                 if key in seen:
                     continue
                 seen.add(key)
-                cases.append(
-                    _user_behavior_case(context, category, reference_case, str(module_path))
+                mapped_case = _user_behavior_case(
+                    context, category, reference_case, str(module_path)
                 )
+                if mapped_case is not None:
+                    cases.append(mapped_case)
     return cases
 
 
@@ -268,8 +286,10 @@ def _user_behavior_selectors(
         return [("launch_game", "Mandatory > launch game")]
     if category == "balance":
         return [("get_player_balance", "Mandatory > get player balance")]
-    if category in {"bet", "settlement", "amount_precision"}:
+    if category in {"bet", "settlement"}:
         return [("bet_and_settle", "Mandatory > bet and settle")]
+    if category == "amount_precision":
+        return []
     if category == "rollback":
         return [("cancel_bet", "Mandatory > cancel Bet")]
     if category == "authenticate":
@@ -300,8 +320,7 @@ def _user_behavior_selectors(
     if category in {"rollback_bet", "rollback_settled_bet"}:
         return [
             ("cancel_bet", "rollback_by_bet"),
-            ("cancel_bet", "Vendor specific cases > rollback_by_bet"),
-            ("cancel_bet", "Vendor specific cases > Rollback Settled Bet"),
+            ("rollback", "rollback_by_round"),
         ]
     if category == "modify_settlement_adjustment":
         return [
@@ -315,13 +334,21 @@ def _user_behavior_selectors(
     if category == "idempotency":
         return [("bet_and_settle", "idempotency")]
     if category == "slot_game":
-        return [("slot_game", "Game Type > Slot game")]
+        return [("slot_game", "Game category > Slot game")]
     if category == "live_game":
-        return [("live_game", "Game Type > Live game")]
+        return [("live_game", "Game category > Live game")]
     if category == "arcade_game":
-        return [("mini_game", "Game Type > Mini game")]
+        return [("mini_game", "Game category > Mini game")]
     if category == "mini_game":
-        return [("mini_game", "Game Type > Mini game")]
+        return [("mini_game", "Game category > Mini game")]
+    if category == "instant_win":
+        return [("instant_win", "Game category > Instant Win")]
+    if category == "poker_game":
+        return [("poker_game", "Game category > Poker game")]
+    if category == "table_game":
+        return [("table_game", "Game category > Table game")]
+    if category == "video_bingo":
+        return [("video_bingo", "Game category > Video Bingo")]
     return []
 
 
@@ -335,11 +362,12 @@ def _load_reference_module_cases(module_path: Path) -> list[dict[str, Any]]:
 
 
 def _path_matches(path: str, fragment: str) -> bool:
-    normalized_path = _normalize_reference_path(path)
-    normalized_fragment = _normalize_reference_path(fragment)
-    if "special test cases" in normalized_path:
+    parts = tuple(
+        part.strip().casefold() for part in str(path).split(">") if part.strip()
+    )
+    if "special test cases" in parts:
         return False
-    return normalized_fragment in normalized_path
+    return path_contains_segments(path, fragment)
 
 
 def _normalize_reference_path(value: str) -> str:
@@ -351,9 +379,12 @@ def _user_behavior_case(
     category: str,
     reference_case: dict[str, Any],
     module_path: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     case_category = _user_behavior_case_category(category, reference_case)
-    output_section = _user_behavior_output_section(case_category, reference_case)
+    decision = map_user_behavior_case(case_category, reference_case)
+    if decision.status != "mapped" or not decision.output_section:
+        return None
+    output_section = decision.output_section
     scenario = _adapt_behavior_text(context, str(reference_case.get("scenario", "")))
     case = {
         "output_section": output_section,
@@ -368,7 +399,10 @@ def _user_behavior_case(
         "source_reference": {
             "generated_by": USER_BEHAVIOR_GENERATED_BY,
             "source_case_id": reference_case.get("id", ""),
+            "source_module": reference_case.get("module", ""),
             "source_path": reference_case.get("path", ""),
+            "mapping_rule_id": decision.rule_id,
+            "mapping_status": decision.status,
             "xmind_reference_cases": [module_path],
         },
         "unresolved_questions": [],
@@ -390,56 +424,9 @@ def _user_behavior_case_category(
 def _user_behavior_output_section(
     category: str, reference_case: dict[str, Any]
 ) -> str:
-    """Project the revised User Behavior source tree into generated XMind paths."""
-    base = KNOWLEDGE_CATEGORY_TO_XMIND_SECTION.get(
-        category, "User Behavior > Bet and Settle"
-    )
-    if not base.startswith("User Behavior >"):
-        return base
-
-    parts = [part.strip() for part in str(reference_case.get("path", "")).split(">") if part.strip()]
-    lowered = [part.lower() for part in parts]
-    if base not in {"User Behavior > Bet and Settle", "User Behavior > Cancel Bet"}:
-        return base
-
-    title_subcategory = _user_behavior_title_subcategory(reference_case)
-    if title_subcategory:
-        return f"{base} > {title_subcategory}"
-
-    if category in {"freespin", "jackpot"}:
-        return "User Behavior > Bet and Settle > Jackpot / FreeSpin"
-
-    if category == "modify_settlement_adjustment":
-        return "User Behavior > Bet and Settle > Adjustment"
-    if category == "cancel_settlement_adjustment":
-        return "User Behavior > Cancel Bet > Adjustment"
-
-    if category in VENDOR_SPECIFIC_BEHAVIOR_CATEGORIES:
-        vendor_root = "User Behavior > Cancel Bet" if base.endswith("Cancel Bet") else "User Behavior > Bet and Settle"
-        return f"{vendor_root} > Vendor specific cases"
-
-    # These capability-driven cases are vendor-specific by definition.  Keep
-    # them under the explicit branch even when an older reference JSON does not
-    # yet contain the Vendor specific cases wrapper.
-    if category in {"multiple_bets", "multiple_bets_one_bet_endpoint", "multiple_bets_two_bet_endpoint"}:
-        return "User Behavior > Bet and Settle > Vendor specific cases"
-    if category in {"rollback_bet", "rollback_settled_bet"}:
-        return "User Behavior > Cancel Bet > Vendor specific cases"
-
-    # Vendor-specific cases are intentionally retained as a visible branch.
-    if "vendor specific cases" in lowered:
-        return f"{base} > Vendor specific cases"
-
-    # BetAndSettle/Mandatory/<subcategory> maps to Bet and Settle/<subcategory>.
-    if lowered[:2] == ["betandsettle", "mandatory"] and len(parts) > 2:
-        return " > ".join([base, *parts[2:]])
-
-    # Mandatory/<operation>/<subcategory> keeps the subcategory but removes
-    # the source-only operation wrapper.
-    operation = "bet and settle" if base.endswith("Bet and Settle") else "cancel bet"
-    if len(lowered) >= 3 and lowered[0] == "mandatory" and lowered[1] == operation:
-        return " > ".join([base, *parts[2:]])
-    return base
+    """Return the canonical output path, or an empty string when not mapped."""
+    decision = map_user_behavior_case(category, reference_case)
+    return decision.output_section or ""
 
 
 def _user_behavior_title_subcategory(reference_case: dict[str, Any]) -> str:
@@ -459,12 +446,15 @@ def _user_behavior_title_subcategory(reference_case: dict[str, Any]) -> str:
 
 
 def _behavior_module(output_section: str, reference_case: dict[str, Any]) -> str:
-    if output_section.startswith("User Behavior > Game type"):
-        return output_section.split(">")[-1].strip()
     leaf = output_section.split(">")[-1].strip()
+    if " > Game type > Game category > " in output_section:
+        return leaf
     if leaf in {
-        "Jackpot / FreeSpin",
-        "Adjustment",
+        "Main flow",
+        "Bet config",
+        "Settle config",
+        "BetAndSettle config",
+        "Cancel config",
         "Special accounts",
         "Player / Game status",
     }:
@@ -1453,7 +1443,8 @@ def _parameter_steps(
         return _hash_parameter_steps(endpoint, parameter, code, error_response, error_label)
 
     if "amount" in leaf_name:
-        decimal_case_title, decimal_case_request = _amount_decimal_case(endpoint, parameter)
+        valid_decimal, invalid_decimal = _amount_decimal_cases(endpoint, parameter)
+        success_response = _json_block(_success_response(endpoint))
         steps = [
             _step_case(
                 f"{parameter_name} doesn't set",
@@ -1468,9 +1459,14 @@ def _parameter_steps(
                 code,
                 error_response,
             ),
+            _success_step_case(
+                valid_decimal[0],
+                valid_decimal[1],
+                success_response,
+            ),
             _step_case(
-                decimal_case_title,
-                decimal_case_request,
+                invalid_decimal[0],
+                invalid_decimal[1],
                 code,
                 error_response,
             ),
@@ -1656,7 +1652,7 @@ def _optional_parameter_steps(
     elif _is_object_parameter(parameter):
         return _optional_object_parameter_steps(context, endpoint, parameter)
     elif "amount" in leaf_name:
-        decimal_case_title, decimal_case_request = _amount_decimal_case(endpoint, parameter)
+        valid_decimal, invalid_decimal = _amount_decimal_cases(endpoint, parameter)
         success_response = _json_block(_success_response(endpoint))
         steps = [
             _success_step_case(
@@ -1671,9 +1667,16 @@ def _optional_parameter_steps(
                 success_response,
             ),
             _success_step_case(
-                decimal_case_title,
-                decimal_case_request,
+                valid_decimal[0],
+                valid_decimal[1],
                 success_response,
+            ),
+            _step_case_for_error(
+                invalid_decimal[0],
+                invalid_decimal[1],
+                context,
+                endpoint,
+                context.get("parameter_error", {}),
             ),
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
@@ -1719,11 +1722,33 @@ def _optional_amount_missing_request_line(parameter: dict[str, Any]) -> str:
 
 
 def _amount_decimal_case(endpoint: dict[str, Any], parameter: dict[str, Any]) -> tuple[str, str]:
+    """Return the invalid max+1 decimal boundary for compatibility."""
+    return _amount_decimal_cases(endpoint, parameter)[1]
+
+
+def _amount_decimal_cases(
+    endpoint: dict[str, Any], parameter: dict[str, Any]
+) -> tuple[tuple[str, str], tuple[str, str]]:
     name = str(parameter.get("name", "amount"))
     max_decimals = _infer_amount_decimal_places(endpoint, parameter)
-    invalid_decimals = max_decimals + 1 if max_decimals is not None else 9
-    value = "100." + "".join(str((index % 9) + 1) for index in range(invalid_decimals))
-    return f"{name} Input {invalid_decimals} decimal numbers", _amount_request_line(parameter, value)
+    valid_value = _decimal_boundary_value(max_decimals)
+    invalid_decimals = max_decimals + 1
+    invalid_value = _decimal_boundary_value(invalid_decimals)
+    return (
+        (
+            f"{name} Input {max_decimals} decimal numbers",
+            _amount_request_line(parameter, valid_value),
+        ),
+        (
+            f"{name} Input {invalid_decimals} decimal numbers",
+            _amount_request_line(parameter, invalid_value),
+        ),
+    )
+
+
+def _decimal_boundary_value(decimal_places: int) -> str:
+    digits = "".join(str((index % 9) + 1) for index in range(decimal_places))
+    return f"100.{digits}"
 
 
 def _amount_request_line(parameter: dict[str, Any], value: str) -> str:
@@ -1736,9 +1761,9 @@ def _format_amount_value(parameter: dict[str, Any], value: str) -> str:
     return json.dumps(value) if _is_string_type(parameter_type) or "numeric string" in parameter_type else value
 
 
-def _infer_amount_decimal_places(endpoint: dict[str, Any], parameter: dict[str, Any]) -> int | None:
+def _infer_amount_decimal_places(endpoint: dict[str, Any], parameter: dict[str, Any]) -> int:
     explicit = _explicit_decimal_places_from_text(_amount_precision_text(endpoint, parameter))
-    return explicit if explicit is not None else _decimal_places_from_examples(endpoint)
+    return explicit if explicit is not None else DEFAULT_MAX_DECIMAL_PLACES
 
 
 def _amount_precision_text(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
@@ -1764,35 +1789,6 @@ def _explicit_decimal_places_from_text(text: str) -> int | None:
         if match:
             return int(match.group(1))
     return None
-
-
-def _decimal_places_from_examples(endpoint: dict[str, Any]) -> int | None:
-    counts = []
-    for key in ("request_example", "success_response_example", "error_response_example"):
-        example = endpoint.get(key)
-        if isinstance(example, (dict, list)):
-            counts.extend(_amount_decimal_counts(example))
-    return max(counts) if counts else None
-
-
-def _amount_decimal_counts(value: Any) -> list[int]:
-    counts = []
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            if "amount" in str(key).lower() or "balance" in str(key).lower():
-                count = _decimal_count(nested)
-                if count is not None:
-                    counts.append(count)
-            counts.extend(_amount_decimal_counts(nested))
-    elif isinstance(value, list):
-        for nested in value:
-            counts.extend(_amount_decimal_counts(nested))
-    return counts
-
-
-def _decimal_count(value: Any) -> int | None:
-    match = re.fullmatch(r"-?\d+\.(\d+)", str(value))
-    return len(match.group(1)) if match else None
 
 
 def _array_parameter_steps(
