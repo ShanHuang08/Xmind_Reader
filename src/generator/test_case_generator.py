@@ -37,6 +37,7 @@ VENDOR_SPECIFIC_BEHAVIOR_CATEGORIES = {
     "multiple_settlements_no_round_end_control_parameter",
     "bet_and_settle_has_round_end_control_parameter",
     "modify_settlement_adjustment",
+    "cancel_settlement_adjustment",
     "idempotency",
     "freespin",
     "jackpot",
@@ -83,6 +84,29 @@ CATEGORY_OUTPUT_PRIORITY = [
     "arcade_game",
     "mini_game",
 ]
+
+SPECIAL_ACCOUNT_TITLE_PHRASES = (
+    "timeout player",
+    "timeout user",
+    "error player",
+    "error user",
+    "result0 player",
+    "result0 user",
+    "refund0 player",
+    "refund0 user",
+    "cancel player",
+    "cancel user",
+    "delay10s player",
+    "delay10s user",
+)
+
+PLAYER_GAME_STATUS_TITLE_PHRASES = (
+    "game status is abnormal",
+    "player status is abnormal",
+    # Preserve routing for existing reference cases that contain this typo.
+    "game status is abnornal",
+    "player status is abnornal",
+)
 
 
 def generate_test_cases_for_draft(
@@ -280,7 +304,10 @@ def _user_behavior_selectors(
             ("cancel_bet", "Vendor specific cases > Rollback Settled Bet"),
         ]
     if category == "modify_settlement_adjustment":
-        return [("bet_and_settle", "modify_settlement_adjustment")]
+        return [
+            ("bet_and_settle", "modify_settlement_adjustment"),
+            ("cancel_bet", "modify_settlement_adjustment"),
+        ]
     if category == "freespin":
         return [("bet_and_settle", "FreeSpin")]
     if category == "jackpot":
@@ -325,16 +352,17 @@ def _user_behavior_case(
     reference_case: dict[str, Any],
     module_path: str,
 ) -> dict[str, Any]:
-    output_section = _user_behavior_output_section(category, reference_case)
+    case_category = _user_behavior_case_category(category, reference_case)
+    output_section = _user_behavior_output_section(case_category, reference_case)
     scenario = _adapt_behavior_text(context, str(reference_case.get("scenario", "")))
     case = {
         "output_section": output_section,
         "module": _behavior_module(output_section, reference_case),
-        "category": category,
+        "category": case_category,
         "scenario": scenario,
-        "preconditions": _behavior_preconditions(context, category),
+        "preconditions": _behavior_preconditions(context, case_category),
         "steps": _behavior_steps(context, reference_case),
-        "remarks": _behavior_remarks(context, category),
+        "remarks": _behavior_remarks(context, case_category),
         "tags": list(reference_case.get("tags", [])),
         "priority": reference_case.get("priority", "P2"),
         "source_reference": {
@@ -347,6 +375,16 @@ def _user_behavior_case(
     }
     case["expected_error"] = _behavior_expected_error(context)
     return case
+
+
+def _user_behavior_case_category(
+    selected_category: str, reference_case: dict[str, Any]
+) -> str:
+    if selected_category == "modify_settlement_adjustment":
+        source_module = str(reference_case.get("module", "")).strip().lower()
+        if source_module == "cancel bet":
+            return "cancel_settlement_adjustment"
+    return selected_category
 
 
 def _user_behavior_output_section(
@@ -363,6 +401,18 @@ def _user_behavior_output_section(
     lowered = [part.lower() for part in parts]
     if base not in {"User Behavior > Bet and Settle", "User Behavior > Cancel Bet"}:
         return base
+
+    title_subcategory = _user_behavior_title_subcategory(reference_case)
+    if title_subcategory:
+        return f"{base} > {title_subcategory}"
+
+    if category in {"freespin", "jackpot"}:
+        return "User Behavior > Bet and Settle > Jackpot / FreeSpin"
+
+    if category == "modify_settlement_adjustment":
+        return "User Behavior > Bet and Settle > Adjustment"
+    if category == "cancel_settlement_adjustment":
+        return "User Behavior > Cancel Bet > Adjustment"
 
     if category in VENDOR_SPECIFIC_BEHAVIOR_CATEGORIES:
         vendor_root = "User Behavior > Cancel Bet" if base.endswith("Cancel Bet") else "User Behavior > Bet and Settle"
@@ -392,10 +442,44 @@ def _user_behavior_output_section(
     return base
 
 
+def _user_behavior_title_subcategory(reference_case: dict[str, Any]) -> str:
+    """Route special-account and status cases using their case title."""
+    title = str(
+        reference_case.get("scenario")
+        or reference_case.get("title")
+        or reference_case.get("child_topic")
+        or ""
+    )
+    normalized_title = " ".join(title.casefold().split())
+    if any(phrase in normalized_title for phrase in SPECIAL_ACCOUNT_TITLE_PHRASES):
+        return "Special accounts"
+    if any(phrase in normalized_title for phrase in PLAYER_GAME_STATUS_TITLE_PHRASES):
+        return "Player / Game status"
+    return ""
+
+
 def _behavior_module(output_section: str, reference_case: dict[str, Any]) -> str:
     if output_section.startswith("User Behavior > Game type"):
         return output_section.split(">")[-1].strip()
+    leaf = output_section.split(">")[-1].strip()
+    if leaf in {
+        "Jackpot / FreeSpin",
+        "Adjustment",
+        "Special accounts",
+        "Player / Game status",
+    }:
+        return leaf
     return str(reference_case.get("module") or output_section.split(">")[-1].strip())
+
+
+def _parameter_title_behavior_category(_title: str) -> str:
+    """Reserved hook for future parameter-title-derived behavior cases.
+
+    Parameter validation cases remain under API parameter test for now. Future
+    derivation can map freespin/jackpot/adjust titles into the fixed User
+    Behavior branches without changing the routing contract introduced here.
+    """
+    return ""
 
 
 def _behavior_preconditions(context: dict[str, Any], category: str) -> str:
@@ -505,6 +589,7 @@ def _endpoint_for_behavior_category(context: dict[str, Any], category: str) -> d
         "rollback_bet": ["cancel_bet", "rollback"],
         "rollback_settled_bet": ["cancel_bet", "rollback"],
         "modify_settlement_adjustment": ["settlement"],
+        "cancel_settlement_adjustment": ["cancel_bet", "rollback", "settlement"],
         "freespin": ["settlement"],
         "jackpot": ["settlement"],
         "idempotency": ["settlement", "bet"],

@@ -104,11 +104,11 @@ def selected_categories(
             categories.add("multiple_settlements_has_round_end_control_parameter")
         else:
             categories.add("multiple_settlements_no_round_end_control_parameter")
-    if supports.get("jackpot") and _nested_value(
-        analysis, ("parameter_semantics", "jackpot_control")
-    ):
+    if supports.get("jackpot"):
         categories.add("jackpot")
-    if _nested_value(analysis, ("parameter_semantics", "free_spin_control")):
+    if supports.get("free_spin") or _nested_value(
+        analysis, ("parameter_semantics", "free_spin_control")
+    ):
         categories.add("freespin")
     return sorted(categories)
 

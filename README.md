@@ -436,7 +436,7 @@ XMind 結構分為兩層：
 
 - **Mandatory**：不管 vendor capability 為何都要產生的必要測項（launch game、balance、bet、settlement、rollback、amount precision）
 - **Conditional Mandatory**：屬於必要測項，但必須先由 API doc 形態判斷是否可套用。例如 `BetAndSettle` 只有在偵測到 combined bet-and-settlement endpoint 時才選入，最後仍放在 `User Behavior > Bet and Settle`。
-- **Capability: xxx**：先依 `capability_profile.supports[xxx]` 決定是否選入，再依 `endpoint_analysis` 選擇正確分支（multiple_bets、multiple_settlements、rollback_settlements、cancel_bet、jackpot、idempotency 等）。`jackpot` 只有在 settlement/result endpoint 真的有 jackpot 相關 request parameters 時才抽；`free_spin` 則改看 bet 或 settlement/result endpoint 是否有 freespin 相關 request parameters。
+- **Capability: xxx**：先依 `capability_profile.supports[xxx]` 決定是否選入，再依 `endpoint_analysis` 選擇正確分支（multiple_bets、multiple_settlements、rollback_settlements、cancel_bet、jackpot、idempotency 等）。`jackpot` 與 `free_spin` 只要 vendor capability 宣告支援就載入；即使 capability 未標記，`free_spin_control` parameter semantics 仍可補選 FreeSpin cases。
 
 `endpoint_analyzer.py` 會把完整 endpoint / parameter table 壓縮成小型摘要，讓後續 generator 不必反覆讀完整 vendor doc，也避免抽錯 User Behavior template：
 
@@ -460,7 +460,9 @@ endpoint_roles + request_parameters
 - `multiple_settlements`
   - `has_round_end_control_parameter`：settlement/result endpoint 有 round-end control parameter。
   - `no_round_end_control_parameter`：沒有 round-end control parameter，測項重點改看 transfer posting、balance change、idempotency / duplicate behavior。
-- `FreeSpin`：不同 vendor 可能把 freespin 欄位放在 bet 或 settlement/result endpoint；只要這些 endpoint 的 request parameters 有 freespin/free game/free bet/bonus/campaign 相關欄位，就抽 `freespin`。
+- `Jackpot / FreeSpin`：`FreeSpin` 與 `settle_by_round > jackpot` 參考案例統一輸出到 `User Behavior > Bet and Settle > Jackpot / FreeSpin`。
+- `Adjustment`：`modify_settlement_adjustment` 參考案例依來源 module 分流到 `User Behavior > Bet and Settle > Adjustment` 或 `User Behavior > Cancel Bet > Adjustment`。
+- 以上三個輸出節點會由 XMind writer 預先建立，即使當前 vendor 沒有選中案例也會保留空節點。Parameter title 的 freespin/jackpot/adjust 推導預留擴充入口，目前 API parameter cases 仍維持原分類。
 - `Special test cases`：預留給未來擴充，目前 selector 會跳過，不會抽取或生成。
 
 目前已實作：

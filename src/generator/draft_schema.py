@@ -84,6 +84,7 @@ KNOWLEDGE_CATEGORY_TO_XMIND_SECTION = {
     "multiple_settlements_has_round_end_control_parameter": "User Behavior > Bet and Settle",
     "multiple_settlements_no_round_end_control_parameter": "User Behavior > Bet and Settle",
     "modify_settlement_adjustment": "User Behavior > Bet and Settle",
+    "cancel_settlement_adjustment": "User Behavior > Cancel Bet",
     "settle_by_round_or_settle_by_bet": "User Behavior > Bet and Settle",
     "bet_and_settle": "User Behavior > Bet and Settle",
     "bet_and_settle_has_round_end_control_parameter": "User Behavior > Bet and Settle",

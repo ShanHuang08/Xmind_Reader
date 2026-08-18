@@ -195,10 +195,8 @@ def _validate_output_section(
     category = test_case.get("category", "")
     is_allowed_descendant = any(
         output_section.startswith(f"{parent} > ")
-        for parent in (
-            "User Behavior > Bet and Settle",
-            "User Behavior > Cancel Bet",
-        )
+        for parent in ALLOWED_OUTPUT_SECTIONS
+        if parent.startswith("User Behavior >")
     )
     if output_section and output_section not in ALLOWED_OUTPUT_SECTIONS and not is_allowed_descendant:
         errors.append(
@@ -214,11 +212,15 @@ def _validate_output_section(
         expected_section
         and output_section.startswith(f"{expected_section} > ")
     )
+    is_alias_descendant = any(
+        output_section.startswith(f"{alias} > ") for alias in allowed_aliases
+    )
     if (
         expected_section
         and output_section
         and output_section not in {expected_section, *allowed_aliases}
         and not is_expected_descendant
+        and not is_alias_descendant
     ):
         errors.append(
             _error(

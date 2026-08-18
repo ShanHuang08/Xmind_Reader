@@ -87,6 +87,7 @@ def _build_sheet(draft: dict[str, Any], show_case_id: bool = False) -> dict[str,
     regression = _ensure_child(root, "Regression")
     vendor_integration = _ensure_child(regression, "Vendor_integration")
     vendor_topic = _ensure_child(vendor_integration, vendor)
+    _ensure_fixed_user_behavior_categories(vendor_topic)
 
     for case in draft.get("test_cases", []):
         if not isinstance(case, dict):
@@ -99,6 +100,16 @@ def _build_sheet(draft: dict[str, Any], show_case_id: bool = False) -> dict[str,
         "title": vendor,
         "rootTopic": root,
     }
+
+
+def _ensure_fixed_user_behavior_categories(vendor_topic: dict[str, Any]) -> None:
+    """Create capability branches even when this vendor selects no cases."""
+    user_behavior = _ensure_child(vendor_topic, "User Behavior")
+    bet_and_settle = _ensure_child(user_behavior, "Bet and Settle")
+    _ensure_child(bet_and_settle, "Jackpot / FreeSpin")
+    _ensure_child(bet_and_settle, "Adjustment")
+    cancel_bet = _ensure_child(user_behavior, "Cancel Bet")
+    _ensure_child(cancel_bet, "Adjustment")
 
 
 def _place_case(vendor_topic: dict[str, Any], case: dict[str, Any], show_case_id: bool = False) -> None:
