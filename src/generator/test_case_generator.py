@@ -23,6 +23,7 @@ from generator.user_behavior_mapping import (
     PLAYER_GAME_STATUS_TITLE_PHRASES,
     SPECIAL_ACCOUNT_TITLE_PHRASES,
     build_user_behavior_mapping_report,
+    automation_tag_for_output_section,
     map_user_behavior_case,
     path_contains_segments,
 )
@@ -129,6 +130,10 @@ def generate_test_cases_for_draft(
 
     vendor_cases = _vendor_test_scenario_cases(context)
     cases.extend(normalize_user_behavior_debit_credit_terms(context, vendor_cases))
+
+    for case in cases:
+        if isinstance(case, dict):
+            case["tags"] = [automation_tag_for_output_section(case.get("output_section", ""))]
 
     return cases
 

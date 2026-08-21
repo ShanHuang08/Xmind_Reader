@@ -47,6 +47,13 @@ GAME_CATEGORY_SECTIONS = {
     for title in GAME_CATEGORY_MODULES.values()
 }
 
+
+def automation_tag_for_output_section(output_section: str) -> str:
+    """Return the only allowed automation label for a generated case."""
+    normalized = " ".join(str(output_section or "").casefold().split())
+    marker = " > game type > game category > "
+    return "ui_auto" if marker in normalized else "api_auto"
+
 CANONICAL_USER_BEHAVIOR_LEAF_SECTIONS = {
     LAUNCH_GAME_SECTION,
     BALANCE_SECTION,

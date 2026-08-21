@@ -16,6 +16,7 @@ from generator.test_case_generator import (
 )
 from generator.user_behavior_mapping import (
     MAPPING_CONTRACT_VERSION,
+    automation_tag_for_output_section,
     build_user_behavior_mapping_report,
     map_user_behavior_case,
 )
@@ -23,6 +24,18 @@ from xmind_writer.metersphere_xmind_writer import _build_sheet
 
 
 class UserBehaviorRoutingTests(unittest.TestCase):
+    def test_automation_tags_are_limited_by_output_section(self) -> None:
+        self.assertEqual(
+            automation_tag_for_output_section(
+                "User Behavior > Bet and Settle > Game type > Game category > Slot game"
+            ),
+            "ui_auto",
+        )
+        self.assertEqual(automation_tag_for_output_section("API parameter test"), "api_auto")
+        self.assertEqual(
+            automation_tag_for_output_section("User Behavior > Bet and Settle > Bet config"),
+            "api_auto",
+        )
     def test_confluence_checked_game_types_override_game_code_inference(self) -> None:
         context = {
             "capability_profile": {

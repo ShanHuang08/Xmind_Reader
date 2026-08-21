@@ -18,6 +18,7 @@ from generator.user_behavior_mapping import (
     BET_AND_SETTLE_CONFIG_SECTION,
     BET_SETTLE_GAME_CATEGORY,
     GAME_CATEGORY_MODULES,
+    automation_tag_for_output_section,
 )
 
 
@@ -196,7 +197,9 @@ def _case_field_topics(case: dict[str, Any], show_case_id: bool = False) -> list
     topics = [
         _topic(str(case.get("preconditions", f"{labels['preconditions']}"))),
         _topic(f"{labels['module']}{case.get('module') or _module_from_case(case)}"),
-        _topic(f"{labels['labels']}{', '.join(case.get('tags', []))}"),
+        _topic(
+            f"{labels['labels']}{automation_tag_for_output_section(case.get('output_section', ''))}"
+        ),
         _topic(str(case.get("remarks", f"{labels['remarks']}"))),
         _topic(f"{labels['priority']}{case.get('priority', 'P2')}"),
         _steps_topic(case),
