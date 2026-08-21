@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 
 from doc_reader.parameter_dependency import compile_parameter_dependencies
-from generator.test_case_generator import _normal_request_value, _parameter_validation_cases, _space_request_line
+from generator.test_case_generator import (
+    _hash_parameter_steps,
+    _normal_request_value,
+    _parameter_validation_cases,
+    _space_request_line,
+)
 
 
 class ParameterDependencyCompilerTests(unittest.TestCase):
@@ -25,6 +30,24 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
             parameter = {"name": name, "type": "String"}
             self.assertEqual(_normal_request_value(endpoint, parameter), expected)
             self.assertIn(expected.strip('"'), _space_request_line(endpoint, parameter))
+
+    def test_hash_parameter_steps_include_whitespace_validation(self) -> None:
+        steps = _hash_parameter_steps(
+            {"request_example": {"hash": "hash-value"}},
+            {"name": "Hash", "type": "String"},
+            "BAD_REQUEST",
+            "{}",
+        )
+        self.assertEqual(
+            [step["step"].split("\n", 1)[0] for step in steps],
+            [
+                "Hash doesn't set",
+                "Hash leave blank",
+                "Hash input space",
+                "Hash input int",
+            ],
+        )
+        self.assertEqual(steps[2]["step"].split("\n", 1)[1], '"Hash": " hash-value "')
 
     def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
         endpoints = [

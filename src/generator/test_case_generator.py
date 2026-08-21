@@ -1600,6 +1600,12 @@ def _hash_parameter_steps(
             error_response, error_label,
         ),
         _step_case(
+            f"{parameter_name} input space",
+            _space_request_line(endpoint, parameter),
+            expected_code,
+            error_response, error_label,
+        ),
+        _step_case(
             f"{parameter_name} input int",
             f'"{parameter_name}": 123',
             expected_code,
