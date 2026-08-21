@@ -1568,6 +1568,23 @@ def _parameter_steps(
             )
         )
 
+    if _is_pipe_amount_parameter(parameter):
+        amount_value, transaction_value = _pipe_amount_components(endpoint, parameter)
+        for title, value in (
+            (f"{parameter_name} amount doesn't set", f"|{transaction_value}"),
+            (f"{parameter_name} amount input string", f"abc|{transaction_value}"),
+            (f"{parameter_name} amount input negative number", f"-1|{transaction_value}"),
+            (f"{parameter_name} amount input decimal", f"{amount_value}.5|{transaction_value}"),
+        ):
+            steps.append(
+                _step_case(
+                    title,
+                    f'"{parameter_name}": "{value}"',
+                    code,
+                    error_response,
+                )
+            )
+
     if _is_uppercase_action_parameter(parameter):
         steps.append(
             _step_case(
@@ -1578,6 +1595,28 @@ def _parameter_steps(
             )
         )
     return steps
+
+
+def _is_pipe_amount_parameter(parameter: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(parameter.get(key, "")) for key in ("name", "description", "remark")
+    ).casefold()
+    return "transactionid" in text and "amount" in text and "|" in text
+
+
+def _pipe_amount_components(
+    endpoint: dict[str, Any], parameter: dict[str, Any]
+) -> tuple[str, str]:
+    raw = _normal_request_value(endpoint, parameter)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = raw.strip('"')
+    text = str(value)
+    amount, separator, transaction = text.partition("|")
+    if not separator:
+        return "1000", f"<confirm {parameter.get('name', 'transactionId')}>"
+    return amount or "1000", transaction or f"<confirm {parameter.get('name', 'transactionId')}>"
 
 
 def _hash_parameter_steps(

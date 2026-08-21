@@ -64,6 +64,32 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
         self.assertIn('"userId": " 1e9lqcg8ddui "', whitespace_steps[0]["step"])
         self.assertIn("error code 309", whitespace_steps[0]["expected"])
 
+    def test_pipe_amount_parameters_validate_amount_segment(self) -> None:
+        steps = _parameter_steps(
+            {},
+            {"request_example": {"bet": "2000|txn-001"}},
+            {
+                "name": "bet",
+                "type": "String",
+                "required": "Y",
+                "description": "Amount in cents and transactionId in format: bet_amount | transactionId",
+                "remark": "bet_amount and transactionId are separated by |.",
+            },
+            {"code": "610"},
+        )
+        titles = [step["step"].split("\n", 1)[0] for step in steps]
+        self.assertEqual(
+            titles[-4:],
+            [
+                "bet amount doesn't set",
+                "bet amount input string",
+                "bet amount input negative number",
+                "bet amount input decimal",
+            ],
+        )
+        self.assertIn('"bet": "|txn-001"', steps[-4]["step"])
+        self.assertIn('"bet": "-1|txn-001"', steps[-2]["step"])
+
     def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
         endpoints = [
             {
