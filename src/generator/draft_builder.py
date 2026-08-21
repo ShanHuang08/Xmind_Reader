@@ -29,6 +29,7 @@ ENDPOINT_ROLE_RULES = {
     "balance": "balance_check",
     "getbalance": "balance_check",
     "betandresult": "combined_bet_settlement",
+    "betresult": "combined_bet_settlement",
     "betandsettle": "combined_bet_settlement",
     "bet": "bet",
     "debit": "bet",
@@ -37,6 +38,7 @@ ENDPOINT_ROLE_RULES = {
     "settlement": "settlement",
     "credit": "settlement",
     "refund": "cancel_bet",
+    "refundbet": "cancel_bet",
     "cancel": "cancel_bet",
     "rollback": "rollback",
     "endround": "balance_confirmation_only",
@@ -153,6 +155,10 @@ def _infer_role(endpoint_path: str) -> str:
     if parts and parts[-1] == "wallet":
         return "balance_check"
     last = parts[-1] if parts else lowered.rsplit("/", 1)[-1]
+    # Vendor docs commonly expose Java/Spring-style endpoint suffixes such as
+    # ``betresult.do``. Normalize the suffix before applying role rules so
+    # these documented wallet endpoints are not treated as supporting-only.
+    last = re.sub(r"\.(?:do|action|json)$", "", last)
     return ENDPOINT_ROLE_RULES.get(last, "supporting_endpoint")
 
 

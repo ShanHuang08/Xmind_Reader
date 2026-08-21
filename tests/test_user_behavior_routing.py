@@ -4,6 +4,7 @@ from pathlib import Path
 import unittest
 
 from generator.draft_validator import _validate_output_section
+from generator.draft_builder import _infer_role
 from generator.reference_selector import selected_categories
 from generator.test_case_generator import (
     _behavior_module,
@@ -72,6 +73,14 @@ class UserBehaviorRoutingTests(unittest.TestCase):
         self.assertEqual(
             _game_type_categories(context), ["instant_win", "mini_game"]
         )
+
+    def test_java_style_vendor_endpoints_get_behavior_roles(self) -> None:
+        self.assertEqual(_infer_role("/api/v1/megafair/authenticate.do"), "authentication")
+        self.assertEqual(
+            _infer_role("/api/v1/megafair/betresult.do"),
+            "combined_bet_settlement",
+        )
+        self.assertEqual(_infer_role("/api/v1/megafair/refundBet.do"), "cancel_bet")
 
     def test_debit_credit_aliases_preserve_canonical_leaf(self) -> None:
         errors = []
