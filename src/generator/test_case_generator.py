@@ -1562,10 +1562,6 @@ def _parameter_steps(
             )
         )
 
-    if lowered == "userid":
-        steps.append(
-            _step_case("userId input space", '"userId": " playerA "', code, error_response)
-        )
     if _is_uppercase_action_parameter(parameter):
         steps.append(
             _step_case(

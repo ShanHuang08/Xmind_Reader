@@ -6,6 +6,7 @@ from doc_reader.parameter_dependency import compile_parameter_dependencies
 from generator.test_case_generator import (
     _hash_parameter_steps,
     _normal_request_value,
+    _parameter_steps,
     _parameter_validation_cases,
     _space_request_line,
 )
@@ -48,6 +49,19 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
             ],
         )
         self.assertEqual(steps[2]["step"].split("\n", 1)[1], '"Hash": " hash-value "')
+
+    def test_user_id_has_one_documented_whitespace_step(self) -> None:
+        steps = _parameter_steps(
+            {},
+            {"request_example": {"userId": "1e9lqcg8ddui"}},
+            {"name": "userId", "type": "String", "required": "Y"},
+            {"code": "BAD_REQUEST"},
+        )
+        whitespace_steps = [
+            step for step in steps if step["step"].startswith("userId input space")
+        ]
+        self.assertEqual(len(whitespace_steps), 1)
+        self.assertIn('"userId": " 1e9lqcg8ddui "', whitespace_steps[0]["step"])
 
     def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
         endpoints = [
