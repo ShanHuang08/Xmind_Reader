@@ -1517,11 +1517,17 @@ def _parameter_steps(
         )
     )
     steps.append(
-        _step_case(
+        _step_case_for_error(
             f"{parameter_name} input space",
             _space_request_line(endpoint, parameter),
-            code,
-            error_response,
+            context,
+            endpoint,
+            (
+                _error_for_keywords(context, ("unknown userid", "unknown user id", "user not found"))
+                or expected_error
+            )
+            if leaf_name == "userid"
+            else expected_error,
         )
     )
 

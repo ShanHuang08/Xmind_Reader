@@ -52,7 +52,7 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
 
     def test_user_id_has_one_documented_whitespace_step(self) -> None:
         steps = _parameter_steps(
-            {},
+            {"error_codes": [{"code": "309", "context": "Unknown UserID"}]},
             {"request_example": {"userId": "1e9lqcg8ddui"}},
             {"name": "userId", "type": "String", "required": "Y"},
             {"code": "BAD_REQUEST"},
@@ -62,6 +62,7 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
         ]
         self.assertEqual(len(whitespace_steps), 1)
         self.assertIn('"userId": " 1e9lqcg8ddui "', whitespace_steps[0]["step"])
+        self.assertIn("error code 309", whitespace_steps[0]["expected"])
 
     def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
         endpoints = [
