@@ -29,7 +29,9 @@ ENDPOINT_ROLE_RULES = {
     "balance": "balance_check",
     "getbalance": "balance_check",
     "betandresult": "combined_bet_settlement",
-    "betresult": "combined_bet_settlement",
+    # betresult endpoints commonly expose separate Bet and Win operation
+    # variants on one URL; they are not combined BetAndSettle controllers.
+    "betresult": "bet",
     "betandsettle": "combined_bet_settlement",
     "bet": "bet",
     "debit": "bet",

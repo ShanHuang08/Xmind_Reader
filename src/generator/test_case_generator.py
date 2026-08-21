@@ -597,6 +597,30 @@ def _endpoint_for_behavior_category(context: dict[str, Any], category: str) -> d
         for endpoint in endpoints:
             if endpoint.get("role") == role:
                 return endpoint
+    if category in {
+        "settlement",
+        "multiple_settlements",
+        "multiple_settlements_has_round_end_control_parameter",
+        "multiple_settlements_no_round_end_control_parameter",
+        "freespin",
+        "jackpot",
+    }:
+        # Some vendors document Bet and Win as operation variants on one
+        # betresult endpoint. Reuse that endpoint for Win/settlement cases,
+        # but do not classify it as a combined BetAndSettle controller.
+        for endpoint in endpoints:
+            if endpoint.get("role") != "bet":
+                continue
+            variants = endpoint.get("operation_variants", [])
+            if any(
+                "win" in " ".join(
+                    str(variant.get(key, ""))
+                    for key in ("operation", "title")
+                ).casefold()
+                for variant in variants
+                if isinstance(variant, dict)
+            ):
+                return endpoint
     return {}
 
 
