@@ -1569,12 +1569,26 @@ def _parameter_steps(
         )
 
     if _is_pipe_amount_parameter(parameter):
-        amount_value, transaction_value = _pipe_amount_components(endpoint, parameter)
+        _, transaction_value = _pipe_amount_components(endpoint, parameter)
+        max_decimals = _infer_amount_decimal_places(endpoint, parameter)
+        valid_decimal = _decimal_boundary_value(max_decimals)
+        invalid_decimal = _decimal_boundary_value(max_decimals + 1)
         for title, value in (
             (f"{parameter_name} amount doesn't set", f"|{transaction_value}"),
             (f"{parameter_name} amount input string", f"abc|{transaction_value}"),
             (f"{parameter_name} amount input negative number", f"-1|{transaction_value}"),
-            (f"{parameter_name} amount input decimal", f"{amount_value}.5|{transaction_value}"),
+            (
+                f"{parameter_name} amount Input exceed 20 digit numbers",
+                f"123456789012345678901|{transaction_value}",
+            ),
+            (
+                f"{parameter_name} amount Input {max_decimals} decimal numbers",
+                f"{valid_decimal}|{transaction_value}",
+            ),
+            (
+                f"{parameter_name} amount Input {max_decimals + 1} decimal numbers",
+                f"{invalid_decimal}|{transaction_value}",
+            ),
         ):
             steps.append(
                 _step_case(

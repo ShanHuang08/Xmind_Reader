@@ -79,16 +79,19 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
         )
         titles = [step["step"].split("\n", 1)[0] for step in steps]
         self.assertEqual(
-            titles[-4:],
+            titles[-6:],
             [
                 "bet amount doesn't set",
                 "bet amount input string",
                 "bet amount input negative number",
-                "bet amount input decimal",
+                "bet amount Input exceed 20 digit numbers",
+                "bet amount Input 8 decimal numbers",
+                "bet amount Input 9 decimal numbers",
             ],
         )
-        self.assertIn('"bet": "|txn-001"', steps[-4]["step"])
-        self.assertIn('"bet": "-1|txn-001"', steps[-2]["step"])
+        self.assertIn('"bet": "|txn-001"', steps[-6]["step"])
+        self.assertIn('"bet": "-1|txn-001"', steps[-4]["step"])
+        self.assertIn('"bet": "100.12345678|txn-001"', steps[-2]["step"])
 
     def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
         endpoints = [
