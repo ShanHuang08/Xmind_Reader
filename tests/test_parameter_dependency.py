@@ -3,10 +3,29 @@ from __future__ import annotations
 import unittest
 
 from doc_reader.parameter_dependency import compile_parameter_dependencies
-from generator.test_case_generator import _parameter_validation_cases
+from generator.test_case_generator import _normal_request_value, _parameter_validation_cases, _space_request_line
 
 
 class ParameterDependencyCompilerTests(unittest.TestCase):
+    def test_request_example_values_match_parameter_name_casing(self) -> None:
+        endpoint = {
+            "request_example": {
+                "token": "token-value",
+                "hash": "hash-value",
+                "gameSessionId": "session-value",
+                "payload": {"userID": "user-value"},
+            }
+        }
+        for name, expected in (
+            ("Token", '"token-value"'),
+            ("Hash", '"hash-value"'),
+            ("gameSessionID", '"session-value"'),
+            ("userId", '"user-value"'),
+        ):
+            parameter = {"name": name, "type": "String"}
+            self.assertEqual(_normal_request_value(endpoint, parameter), expected)
+            self.assertIn(expected.strip('"'), _space_request_line(endpoint, parameter))
+
     def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
         endpoints = [
             {
@@ -308,7 +327,7 @@ class ParameterDependencyGeneratorTests(unittest.TestCase):
             ["BET", "WIN", "WIN", "WIN"],
         )
         details_case = next(case for case in cases if case["parameter"] == "details")
-        self.assertIn('{"id": "details/id_001"}', details_case["steps"][0]["step"])
+        self.assertIn('{"id": "<confirm details/id>"}', details_case["steps"][0]["step"])
 
     def test_affected_parameter_uses_dependency_cases_and_unaffected_stays_standard(self) -> None:
         endpoint = {

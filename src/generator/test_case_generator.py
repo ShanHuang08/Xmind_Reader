@@ -1205,7 +1205,7 @@ def _is_nested_only_parameter(
 
 
 def _example_has_root_parameter(data: Any, name: str) -> bool:
-    return isinstance(data, dict) and name in data
+    return isinstance(data, dict) and _matching_example_key(data, name) is not None
 
 
 def _parameter_with_example_type(
@@ -2012,8 +2012,9 @@ def _find_example_value(data: Any, name: str) -> Any:
     if path_value is not None:
         return path_value
     if isinstance(data, dict):
-        if name in data:
-            return data[name]
+        key = _matching_example_key(data, name)
+        if key is not None:
+            return data[key]
         for value in data.values():
             found = _find_example_value(value, name)
             if found is not None:
@@ -2033,20 +2034,33 @@ def _find_example_path_value(data: Any, name: str) -> Any:
     current = data
     for part in parts:
         if isinstance(current, dict):
-            if part not in current:
+            key = _matching_example_key(current, part)
+            if key is None:
                 return None
-            current = current[part]
+            current = current[key]
         elif isinstance(current, list):
             dict_items = [item for item in current if isinstance(item, dict)]
             if not dict_items:
                 return None
             current = dict_items[0]
-            if part not in current:
+            key = _matching_example_key(current, part)
+            if key is None:
                 return None
-            current = current[part]
+            current = current[key]
         else:
             return None
     return current
+
+
+def _matching_example_key(data: dict[str, Any], name: str) -> str | None:
+    """Find a request-example key despite casing/acronym differences."""
+    if name in data:
+        return name
+    normalized = _normalized_parameter_name(name)
+    for key in data:
+        if _normalized_parameter_name(str(key)) == normalized:
+            return str(key)
+    return None
 
 
 def _expected_error_response(
@@ -2305,15 +2319,15 @@ def _sample_value(parameter: dict[str, Any]) -> str:
     if "balance" in text or "cash" in text or "bonus" in text:
         return "100"
     if "url" in name or "url" in description:
-        return '"https://example.com"'
+        return json.dumps(f"<confirm {parameter.get('name', 'value')}>", ensure_ascii=False)
     if "numeric string" in param_type:
-        return '"10"'
+        return json.dumps(f"<confirm {parameter.get('name', 'value')}>", ensure_ascii=False)
     if name.endswith("id") or " identifier" in description or " id" in description:
-        return f'"{parameter.get("name", "id")}_001"'
+        return json.dumps(f"<confirm {parameter.get('name', 'id')}>", ensure_ascii=False)
     if "timestamp" in text or "time" in text:
-        return str(int(time.time()))
+        return json.dumps(f"<confirm {parameter.get('name', 'timestamp')}>", ensure_ascii=False)
     if "int" in param_type or "long" in param_type or "decimal" in param_type:
         return "1"
     if "bool" in param_type:
         return "true"
-    return f'"sample_{parameter.get("name", "value")}"'
+    return json.dumps(f"<confirm {parameter.get('name', 'value')}>", ensure_ascii=False)
