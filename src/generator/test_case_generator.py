@@ -62,6 +62,14 @@ UPPERCASE_ACTION_PARAMETER_VALUES = {
     "subtype": "SUBTYPE",
 }
 
+USER_IDENTITY_PARAMETER_NAMES = {
+    "userid",
+    "playerid",
+    "uid",
+    "nickname",
+    "username",
+}
+
 CATEGORY_OUTPUT_PRIORITY = [
     "launch_game",
     "balance",
@@ -1628,7 +1636,7 @@ def _parameter_steps(
                 )
             )
 
-    if _is_uppercase_action_parameter(parameter):
+    if _is_user_identity_parameter(parameter) or _is_uppercase_action_parameter(parameter):
         steps.append(
             _step_case(
                 f"{parameter_name} input uppercase",
@@ -1638,6 +1646,13 @@ def _parameter_steps(
             )
         )
     return steps
+
+
+def _is_user_identity_parameter(parameter: dict[str, Any]) -> bool:
+    """Return whether a parameter identifies a user/player by name or ID."""
+    name = str(parameter.get("name", ""))
+    leaf = _normalized_parameter_name(name.split("/")[-1])
+    return leaf in USER_IDENTITY_PARAMETER_NAMES
 
 
 def _is_pipe_amount_parameter(parameter: dict[str, Any]) -> bool:

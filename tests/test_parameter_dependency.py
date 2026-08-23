@@ -64,6 +64,22 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
         self.assertIn('"userId": " 1e9lqcg8ddui "', whitespace_steps[0]["step"])
         self.assertIn("error code 309", whitespace_steps[0]["expected"])
 
+    def test_user_identity_parameters_have_uppercase_validation(self) -> None:
+        for name in ("userId", "playerId", "uid", "nickname", "bet/userId", "win/userId"):
+            with self.subTest(name=name):
+                steps = _parameter_steps(
+                    {},
+                    {"request_example": {name: "user-value"}},
+                    {"name": name, "type": "String", "required": "Y"},
+                    {"code": "BAD_REQUEST"},
+                )
+                titles = [step["step"].split("\n", 1)[0] for step in steps]
+                self.assertIn(f"{name} input uppercase", titles)
+                uppercase_step = next(
+                    step for step in steps if step["step"].startswith(f"{name} input uppercase")
+                )
+                self.assertIn("USER-VALUE", uppercase_step["step"])
+
     def test_pipe_amount_parameters_validate_amount_segment(self) -> None:
         steps = _parameter_steps(
             {},
