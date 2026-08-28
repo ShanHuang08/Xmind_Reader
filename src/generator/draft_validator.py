@@ -227,8 +227,14 @@ def _validate_output_section(
     output_section = test_case.get("output_section", "")
     category = test_case.get("category", "")
     is_user_behavior = str(output_section).startswith("User Behavior >")
+    alias_roots = {
+        alias
+        for aliases in debit_credit_output_section_aliases().values()
+        for alias in aliases
+    }
     is_allowed = (
         output_section in ALLOWED_OUTPUT_SECTIONS
+        or output_section in alias_roots
         or (is_user_behavior and is_allowed_user_behavior_output_section(str(output_section)))
     )
     if output_section and not is_allowed:

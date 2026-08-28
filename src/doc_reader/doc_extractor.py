@@ -206,6 +206,7 @@ def _attach_endpoint_examples(
     source_examples = source_examples or {}
     for key in (
         "request_example",
+        "request_url_example",
         "success_response_example",
         "error_response_example",
         "additional_request_examples",
@@ -310,12 +311,53 @@ def _section_endpoint_operation_variants(
         cursor += 1
 
         request_examples: list[dict[str, Any]] = []
+        request_url_examples: list[str] = []
         success_examples: list[dict[str, Any]] = []
         error_examples: list[dict[str, Any]] = []
+        additional_request_examples: list[dict[str, Any]] = []
+        response_mode = False
+        example_label = ""
         for block in section.get("content", []):
+            normalized_block = str(block).strip().lower()
+            if normalized_block in {"response", "response example", "expected result format"}:
+                response_mode = True
+                continue
+            if normalized_block.endswith("request example:") or normalized_block in {
+                "debit request example:",
+                "credit request example:",
+                "rollback credit example:",
+                "rollback debit example:",
+            }:
+                example_label = str(block).strip()
+                response_mode = False
+                continue
+            parsed_examples = _examples_from_code_block(str(block))
+            if parsed_examples:
+                if response_mode:
+                    for parsed in parsed_examples:
+                        if isinstance(parsed, dict) and str(parsed.get("status", "")).upper() == "ERROR":
+                            error_examples.append(parsed)
+                        elif isinstance(parsed, dict) and "error" in parsed:
+                            error_examples.append(parsed)
+                        elif isinstance(parsed, dict):
+                            success_examples.append(parsed)
+                else:
+                    for parsed in parsed_examples:
+                        if not isinstance(parsed, dict):
+                            continue
+                        if "rollback" in example_label.lower() or "cancel" in example_label.lower():
+                            additional_request_examples.append(
+                                {"label": example_label, "example": parsed}
+                            )
+                        else:
+                            request_examples.append(parsed)
+                continue
             query = _query_params_from_code_block(str(block))
             if query:
                 request_examples.append(query)
+            request_url = _request_url_example(str(block))
+            if request_url:
+                request_url_examples.append(request_url)
             for request, response in _xml_exchange_examples(str(block)):
                 if request:
                     request_examples.append(request)
@@ -337,10 +379,15 @@ def _section_endpoint_operation_variants(
         }
         if request_examples:
             variant["request_example"] = request_examples[0]
+        request_url = _preferred_request_url_example(request_url_examples)
+        if request_url:
+            variant["request_url_example"] = request_url
         if success_examples:
             variant["success_response_example"] = success_examples[0]
         if error_examples:
             variant["error_response_example"] = error_examples[0]
+        if additional_request_examples:
+            variant["additional_request_examples"] = additional_request_examples
         output.setdefault(endpoint, []).append(
             {key: value for key, value in variant.items() if value not in ("", [], {})}
         )
@@ -490,6 +537,11 @@ def _endpoint_json_examples(sections: list[dict[str, Any]], vendor_name: str = "
             target_endpoint = last_label_endpoint or current_endpoint
             if target_endpoint:
                 entry = examples.setdefault(target_endpoint, {})
+                request_url = _request_url_example(block)
+                if request_url:
+                    entry["request_url_example"] = _preferred_request_url_example(
+                        [str(entry.get("request_url_example", "")), request_url]
+                    )
                 for request, response in _xml_exchange_examples(block):
                     if request:
                         _store_endpoint_example(
@@ -529,6 +581,30 @@ def _endpoint_json_examples(sections: list[dict[str, Any]], vendor_name: str = "
             example_label = ""
         _copy_examples_to_shared_section_endpoints(examples, section_endpoints)
     return examples
+
+
+def _request_url_example(text: str) -> str:
+    """Preserve a documented URL/query example before query parsing decodes it."""
+    candidate_text = str(text or "").strip()
+    if candidate_text.startswith(("http://", "https://")) and "?" in candidate_text:
+        return re.sub(r"\s+", "", candidate_text)
+    match = re.search(
+        r"https?://[^\s<>\"]+(?:\s*\n\s*&[^\s<>\"]+)*",
+        str(text or ""),
+        re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return re.sub(r"\s+", "", match.group(0))
+
+
+def _preferred_request_url_example(candidates: list[str]) -> str:
+    """Prefer a concrete request sample over a documentation template."""
+    values = [str(value or "").strip() for value in candidates if str(value or "").strip()]
+    if not values:
+        return ""
+    concrete = [value for value in values if not re.search(r"\{[^{}]+\}|<[^<>]+>", value)]
+    return concrete[0] if concrete else values[0]
 
 
 def _store_endpoint_example(
@@ -901,7 +977,10 @@ def _is_error_code(value: str, mode: str = "numeric_only") -> bool:
         return False
     lowered = text.lower()
     if mode == "message_as_code":
-        return any(term in lowered for term in ("error", "invalid", "failed", "expired", "funds", "signature"))
+        return bool(re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", text)) or any(
+            term in lowered
+            for term in ("error", "invalid", "failed", "expired", "funds", "signature")
+        )
     if mode == "explicit_code_column":
         return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{2,}", text))
     return False

@@ -68,7 +68,8 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
 
     supplementary_endpoint_roles = _supplementary_endpoint_roles(vendor_dir)
     endpoint_roles = [
-        _endpoint_role(endpoint, supplementary_endpoint_roles) for endpoint in endpoints
+        _endpoint_role(endpoint, supplementary_endpoint_roles)
+        for endpoint in endpoints
     ]
     draft = {
         "schema_version": "draft-test-cases/v1",
@@ -109,7 +110,8 @@ def build_draft(vendor: str, vendor_detail_root: Path, output_root: Path) -> Pat
 
 
 def _endpoint_role(
-    endpoint: dict[str, Any], supplementary_endpoint_roles: dict[str, dict[str, str]] | None = None
+    endpoint: dict[str, Any],
+    supplementary_endpoint_roles: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     path = endpoint.get("endpoint", "")
     supplementary = _matching_supplementary_endpoint(path, supplementary_endpoint_roles or {})

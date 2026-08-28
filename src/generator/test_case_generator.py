@@ -404,7 +404,7 @@ def _user_behavior_case(
         "module": _behavior_module(output_section, reference_case),
         "category": case_category,
         "scenario": scenario,
-        "preconditions": _behavior_preconditions(context, case_category),
+        "preconditions": _behavior_preconditions(context, case_category, reference_case),
         "steps": _behavior_steps(context, reference_case),
         "remarks": _behavior_remarks(context, case_category),
         "tags": list(reference_case.get("tags", [])),
@@ -485,11 +485,59 @@ def _parameter_title_behavior_category(_title: str) -> str:
     return ""
 
 
-def _behavior_preconditions(context: dict[str, Any], category: str) -> str:
+def _behavior_preconditions(
+    context: dict[str, Any], category: str, reference_case: dict[str, Any] | None = None
+) -> str:
+    if category == "launch_game":
+        return _launch_preconditions(context)
     endpoint = _endpoint_for_behavior_category(context, category)
+    if not endpoint:
+        endpoint = next(
+            (
+                item
+                for item in context.get("endpoint_roles", [])
+                if isinstance(item, dict) and item.get("operation_variants")
+            ),
+            {},
+        )
     if endpoint:
+        endpoint = deepcopy(endpoint)
+        title = str((reference_case or {}).get("scenario", "")).casefold()
+        if category == "balance":
+            operation = "balance"
+        elif category in {"rollback", "rollback_bet", "rollback_settled_bet", "cancel_settlement_adjustment"}:
+            operation = "credit"
+        elif category in {
+            "settlement",
+            "multiple_settlements",
+            "multiple_settlements_has_round_end_control_parameter",
+            "multiple_settlements_no_round_end_control_parameter",
+            "freespin",
+            "jackpot",
+        } or any(word in title for word in ("credit", "win", "settle")):
+            operation = "credit"
+        else:
+            operation = "debit"
+        endpoint_path = _operation_endpoint_path(endpoint, operation)
+        if endpoint_path:
+            endpoint["endpoint"] = endpoint_path
         return _preconditions(context, endpoint)
     return _launch_preconditions(context)
+
+
+def _operation_endpoint_path(endpoint: dict[str, Any], operation: str) -> str:
+    """Resolve an operation URL when a document groups variants under one path."""
+    base = str(endpoint.get("endpoint", "")).strip()
+    variants = endpoint.get("operation_variants", [])
+    if not base or not isinstance(variants, list):
+        return base
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        text = " ".join(str(variant.get(key, "")) for key in ("operation", "title")).casefold()
+        if operation in text:
+            return f"{base.rstrip('/')}/{operation}"
+    return base
 
 
 def _behavior_steps(context: dict[str, Any], reference_case: dict[str, Any]) -> list[dict[str, str]]:
@@ -750,15 +798,19 @@ def _parameter_validation_endpoints(context: dict[str, Any]) -> list[dict[str, A
                 "request_parameters",
                 "response_parameters",
                 "request_example",
+                "additional_request_examples",
                 "success_response_example",
                 "error_response_example",
             ):
                 if key in variant:
                     expanded[key] = deepcopy(variant[key])
             operation = str(variant.get("operation", "")).strip()
+            if not operation:
+                title = str(variant.get("title", ""))
+                operation = title.rsplit(":", 1)[-1].strip() if ":" in title else ""
             expanded["endpoint_operation"] = operation
             expanded["endpoint_name"] = (
-                f"{endpoint_display_name} - {operation}"
+                operation
                 if operation
                 else endpoint_display_name
             )
@@ -2103,11 +2155,50 @@ def _normal_request_value(endpoint: dict[str, Any], parameter: dict[str, Any]) -
     value = _find_example_value(example, name)
     if value is not None:
         return json.dumps(value, ensure_ascii=False)
-    if _dependency_leaf_name(name) == "currency":
-        return '"EUR"'
-    if _is_object_parameter(parameter):
-        return _dependency_normal_request_value(endpoint, name)
-    return _sample_value(parameter)
+    value = _find_operation_additional_example_value(endpoint, name)
+    if value is not None:
+        return json.dumps(value, ensure_ascii=False)
+    if (
+        _dependency_leaf_name(name).lower() == "subtype"
+        and str(endpoint.get("endpoint_operation", "")).strip().lower() in {"debit", "credit"}
+    ):
+        return '"cancel"'
+    if _is_optional_parameter(parameter):
+        return _sample_data_value(parameter)
+    return json.dumps(f"<confirm {name or 'parameter'}>", ensure_ascii=False)
+
+
+def _find_operation_additional_example_value(
+    endpoint: dict[str, Any], name: str
+) -> Any:
+    """Find a missing parameter value in the operation's matching example.
+
+    SoftGaming documents rollback examples alongside the main debit/credit
+    request.  Keep the lookup operation-specific so debit subtype uses the
+    Rollback Credit example and credit subtype uses the Rollback Debit example,
+    instead of accidentally borrowing an example from another operation.
+    """
+    operation = str(endpoint.get("endpoint_operation", "")).strip().lower()
+    expected_label = {
+        "debit": "rollback credit example",
+        "credit": "rollback debit example",
+    }.get(operation)
+    if not expected_label:
+        return None
+
+    examples = endpoint.get("additional_request_examples", [])
+    if not isinstance(examples, list):
+        return None
+    for item in examples:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip().lower().rstrip(":")
+        if label != expected_label:
+            continue
+        value = _find_example_value(item.get("example"), name)
+        if value is not None:
+            return value
+    return None
 
 
 def _find_example_value(data: Any, name: str) -> Any:
@@ -2411,6 +2502,33 @@ def _response_payload(endpoint: dict[str, Any]) -> str:
 
 def _json_block(data: dict[str, Any]) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _sample_data_value(parameter: dict[str, Any]) -> str:
+    """Return concrete data for an optional parameter with no documented value."""
+    name = str(parameter.get("name", "parameter"))
+    lowered_name = name.lower()
+    param_type = str(parameter.get("type", "")).lower()
+    description = str(parameter.get("description", "")).lower()
+    text = " ".join([lowered_name, param_type, description])
+
+    if "amount" in text:
+        return "100.0"
+    if "balance" in text or "cash" in text or "bonus" in text:
+        return "100"
+    if "url" in lowered_name or "url" in description:
+        return '"https://example.com"'
+    if "numeric string" in param_type:
+        return '"123"'
+    if lowered_name.endswith("id") or " identifier" in description or " id" in description:
+        return json.dumps(f"sample_{name}", ensure_ascii=False)
+    if "timestamp" in text or "time" in text:
+        return "1700000000"
+    if "int" in param_type or "long" in param_type or "decimal" in param_type:
+        return "1"
+    if "bool" in param_type:
+        return "true"
+    return json.dumps(f"sample_{name}", ensure_ascii=False)
 
 
 def _sample_value(parameter: dict[str, Any]) -> str:

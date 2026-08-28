@@ -51,6 +51,7 @@ def debit_credit_output_section_aliases() -> dict[str, set[str]]:
 
 def _uses_debit_credit_endpoints(context: dict[str, Any]) -> bool:
     roles = [item for item in context.get("endpoint_roles", []) if isinstance(item, dict)]
+    variant_text = " ".join(_endpoint_text(item) for item in roles)
     bet_text = " ".join(_endpoint_text(item) for item in roles if item.get("role") == "bet")
     settlement_text = " ".join(
         _endpoint_text(item) for item in roles if item.get("role") == "settlement"
@@ -58,9 +59,15 @@ def _uses_debit_credit_endpoints(context: dict[str, Any]) -> bool:
     combined_text = " ".join(
         _endpoint_text(item) for item in roles if item.get("role") == "combined_bet_settlement"
     )
-    has_debit = bool(_DEBIT_PATTERN.search(bet_text) or _DEBIT_PATTERN.search(combined_text))
+    has_debit = bool(
+        _DEBIT_PATTERN.search(bet_text)
+        or _DEBIT_PATTERN.search(combined_text)
+        or _DEBIT_PATTERN.search(variant_text)
+    )
     has_credit = bool(
-        _CREDIT_PATTERN.search(settlement_text) or _CREDIT_PATTERN.search(combined_text)
+        _CREDIT_PATTERN.search(settlement_text)
+        or _CREDIT_PATTERN.search(combined_text)
+        or _CREDIT_PATTERN.search(variant_text)
     )
     return has_debit and has_credit
 
@@ -80,6 +87,14 @@ def _endpoint_text(endpoint: dict[str, Any]) -> str:
             values.extend(str(item) for item in value)
         else:
             values.append(str(value or ""))
+    variants = endpoint.get("operation_variants", [])
+    if isinstance(variants, list):
+        for variant in variants:
+            if isinstance(variant, dict):
+                values.extend(
+                    str(variant.get(key, ""))
+                    for key in ("title", "operation", "endpoint_name")
+                )
     return " ".join(values)
 
 
