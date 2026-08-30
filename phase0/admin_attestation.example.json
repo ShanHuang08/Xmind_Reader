@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "observations": {
+    "api_token_auth_enabled": {"passed": false, "source": "admin", "reference": ""},
+    "confluence_read_enabled": {"passed": false, "source": "admin", "reference": ""},
+    "ip_allowlist_verified": {"passed": false, "source": "admin", "reference": ""},
+    "service_account_product_access": {"passed": false, "source": "admin", "reference": ""},
+    "fixture_pages_readable": {"passed": false, "source": "live", "reference": ""},
+    "negative_control_invisible": {"passed": false, "source": "live", "reference": ""},
+    "least_privilege_scopes_verified": {"passed": false, "source": "admin", "reference": ""},
+    "audit_log_identity_visible": {"passed": false, "source": "admin", "reference": ""}
+  }
+}

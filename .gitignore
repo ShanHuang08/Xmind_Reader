@@ -13,6 +13,8 @@ new_vendor_detail/
 output/
 regression-results/
 tools/
+phase0-evidence/
+phase0/*.local.json
 
 # Binary input files (too large for GitHub)
 input_xmind/*.xmind

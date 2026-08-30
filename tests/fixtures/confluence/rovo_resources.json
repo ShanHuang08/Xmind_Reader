@@ -1,0 +1,10 @@
+{
+  "structuredContent": {
+    "resources": [
+      {"id": "cloud-secret-shaped-id", "url": "https://company.atlassian.net"},
+      {"id": "other-cloud", "url": "https://other.atlassian.net"}
+    ]
+  },
+  "content": [],
+  "isError": false
+}

@@ -1,0 +1,4 @@
+# Isolated Phase 0 runtime. Keep the SDK pinned to the contract captured by the spike.
+mcp==2.1.1
+beautifulsoup4>=4.12.0
+lxml>=5.0.0

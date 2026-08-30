@@ -21,6 +21,8 @@
 5. **測試案例生成** (`new_vendor_detail/` → `output/`)
    從 Vendor 中間格式建立 draft JSON、自動產生 API parameter validation 與部分 User Behavior 測試案例、輸出 MeterSphere 相容的 XMind 檔，並回讀驗證。
 
+另有一個與 production pipeline 隔離的 **Rovo MCP Confluence Phase 0 capability spike**，用來驗證 private Confluence page 的唯讀存取、Markdown fidelity、截斷／分頁行為與 REST storage-format 備援可行性。Phase 0 通過前，不會接入 `main.py doc`。
+
 
 ## 安裝方式
 
@@ -42,6 +44,14 @@ python3 -m pip install -r requirements.txt
 
 主要依賴：`lxml`、`python-docx`、`beautifulsoup4`、`markdownify`、`pymupdf4llm`。
 
+如需執行 Rovo MCP Phase 0，另安裝隔離依賴：
+
+```bash
+pip install -r requirements-phase0.txt
+```
+
+Phase 0 目前固定使用 `mcp==2.1.1`。SDK 升級會使既有 tool-schema contract 失效，必須重新執行 Phase 0。
+
 ### macOS 相容性
 
 核心流程（doc reader、draft builder、test case generator、XMind writer）使用 `pathlib`、`json`、`zipfile` 和 UTF-8 讀寫，沒有綁定 Windows 路徑或 shell 指令。macOS / Linux 請使用 `python3` 執行即可。
@@ -51,7 +61,7 @@ URL reader 有 Windows PowerShell fallback，但只會在 Windows 上啟用；ma
 
 ## 執行方式
 
-統一透過 `main.py` 進入，支援五個子命令：
+Production pipeline 統一透過 `main.py` 進入，支援 `xmind`、`doc`、`pdf`、`url`、`generate`、`new-vendor` 六個子命令。Phase 0 使用獨立 script，不是 `main.py` 子命令。
 
 > macOS / Linux 若沒有 `python` 指令，請將以下範例中的 `python` 改為 `python3`，例如 `python3 main.py xmind`。
 
@@ -77,6 +87,74 @@ python main.py doc --input Vendor_Esoterica.doc --vendor Esoterica --force
 ```
 
 Doc reader 會依文件章節順序抽取 endpoint 的 request / response `<pre>` 範例。支援 JSON body，也支援 GET 常見的 URL encoded query，例如 `?token=abc&amount=100` 會轉成 JSON object。若 source file 未變更會跳過重建；調整 parser 或想重新產出 `new_vendor_detail/<Vendor>/` 時請加 `--force`。
+
+### Rovo MCP Confluence Phase 0
+
+目前完成的是**唯讀 capability spike 與 Hard Gate evidence runner**，尚未新增 `python main.py doc --confluence-url ...`。Phase 0 不會呼叫 Confluence write tool、不會修改既有 Vendor output，也不會把 private page body 寫入 repository 或 evidence。
+
+準備方式：
+
+1. 複製 `phase0/fixture_manifest.example.json` 為 `phase0/fixture_manifest.local.json`，換成九類受控測試頁。`long_content` 必須超過 20,000 字並保留 begin/middle/end markers。
+2. 複製並完成 `admin_attestation.example.json`、`failure_observations.example.json`；`.local.json` 已被 gitignore。
+3. 從 secret manager 或 shell environment 注入 credential，不可放在 CLI argument 或 JSON 檔案。
+
+Rovo MCP 必要環境變數：
+
+```text
+ROVO_MCP_URL=https://mcp.atlassian.com/v1/mcp/authv2
+ROVO_MCP_ALLOWED_SITES=company.atlassian.net
+ROVO_MCP_EMAIL=...              # personal Basic auth
+ROVO_MCP_API_TOKEN=...          # personal Basic auth
+ROVO_MCP_API_KEY=...            # service-account Bearer auth
+```
+
+如需驗證 REST API v2 storage-format Plan B，再設定：
+
+```text
+CONFLUENCE_REST_AUTH_MODE=basic|bearer
+CONFLUENCE_REST_EMAIL=...        # Basic only
+CONFLUENCE_REST_API_TOKEN=...    # Basic only
+CONFLUENCE_REST_BEARER_TOKEN=... # Bearer only
+```
+
+先執行不連網的 preflight：
+
+> 下列多行命令使用 macOS/Linux 的 `\`；Windows PowerShell 請改用反引號 `` ` ``，或參考 [ROVO_PHASE0_RUNBOOK.md](ROVO_PHASE0_RUNBOOK.md) 的 PowerShell 範例。
+
+```bash
+python scripts/run_rovo_phase0.py \
+  --manifest phase0/fixture_manifest.local.json \
+  --admin-attestation phase0/admin_attestation.local.json \
+  --failure-observations phase0/failure_observations.local.json \
+  --include-rest \
+  --preflight-only \
+  --evidence phase0-evidence/preflight.json
+```
+
+Preflight 固定輸出 `status: pending` 並以 exit code `2` 結束，表示尚未執行 live calls，不是程式錯誤。
+
+執行完整 live spike：
+
+```bash
+python scripts/run_rovo_phase0.py \
+  --manifest phase0/fixture_manifest.local.json \
+  --auth-mode personal \
+  --auth-mode service_account \
+  --admin-attestation phase0/admin_attestation.local.json \
+  --failure-observations phase0/failure_observations.local.json \
+  --include-rest \
+  --evidence phase0-evidence/phase0.json
+```
+
+Evidence 狀態：
+
+| 狀態 | 意義 |
+|---|---|
+| `pass` | Basic/Bearer、九類 fixtures、admin checklist 與 failure matrix 全部通過；仍需人工簽核 evidence |
+| `pending` | Live credential、管理員證據或 failure observations 尚未完成；不得進入 Phase 1 |
+| `fail` | Required tool/schema、site mapping、內容完整性、截斷或 REST same-version 驗證失敗 |
+
+Evidence 只保存 hash、數量、tool schema、錯誤分類與 gate decision；不保存 Authorization、token、email、page body/title、完整 URL query、cloud ID 或 continuation cursor。完整建置與操作細節請看 [ROVO_PHASE0_RUNBOOK.md](ROVO_PHASE0_RUNBOOK.md)，開發設計請看 [ROVO_MCP_CONFLUENCE_SERVICE_DEVELOPMENT_PLAN.md](ROVO_MCP_CONFLUENCE_SERVICE_DEVELOPMENT_PLAN.md)。
 
 ### URL 補充讀取
 
@@ -223,6 +301,10 @@ output/
     <Vendor>_human_merge_report.md    human copy merge 報告
     <Vendor>_human_merge_manifest.json
     <Vendor>_test_cases_no_merge_key.xmind  可選，乾淨交付 copy
+phase0/                                Phase 0 manifest／attestation 範本
+phase0-evidence/                       Live evidence（gitignored，不可提交）
+scripts/
+  run_rovo_phase0.py                   Read-only Phase 0 runner
 src/
   main.py                             CLI 統一入口
   xmind_reader_main.py                XMind 流程控制
@@ -235,6 +317,7 @@ src/
   chunker/                            知識切分
   exporters/                          JSON/Markdown 匯出
   doc_reader/                         文件解析與抽取
+    confluence_phase0.py              Phase 0 MCP/REST capability、完整性與 evidence gate
   pdf_reader/                         PDF 解析
   url_reader/                         URL 抓取與解析
   generator/                          Draft 建立、Schema、驗證、案例生成
@@ -248,7 +331,7 @@ src/
 
 | 檔案 | 功能 |
 |---|---|
-| `main.py` | CLI 統一入口，提供 `xmind`、`doc`、`pdf`、`url`、`generate` 五個子命令，委派給對應的 `*_main.py` 執行。 |
+| `main.py` | CLI 統一入口，提供 `xmind`、`doc`、`pdf`、`url`、`generate`、`new-vendor` 六個子命令，委派給對應流程執行。Phase 0 維持獨立 script。 |
 
 ### XMind 流程 (`python main.py xmind`)
 
@@ -270,6 +353,14 @@ src/
 | `doc_reader/doc_extractor.py` | Vendor API 知識抽取。提取 endpoints（regex）、error codes、vendor master checklist、capability profile（關鍵字規則 + checklist 優先）、request/response parameter tables，以及 doc code block 中的 request / success / error response example。pre 解析優先照章節中的 `request` / `response` 標題分配，支援 JSON body 與 GET URL encoded query。 |
 | `doc_reader/doc_exporter.py` | 匯出 api_summary.md、endpoints.json、error_codes.json、capability_profile.json、vendor_master_checklist.json、game_codes.json、source_meta.json、raw_doc.json。`api_summary.md` 會列出 Pre Check，標示每個 endpoint 是否抓到 request / response / error response pre。 |
 
+### Rovo MCP Phase 0（獨立 spike）
+
+| 檔案 | 功能 |
+|---|---|
+| `scripts/run_rovo_phase0.py` | Phase 0 CLI。執行 manifest/config preflight，或以 personal Basic + service-account Bearer 完成 live read-only spike；輸出 sanitized evidence。 |
+| `doc_reader/confluence_phase0.py` | 驗證 required tools、tool schema、host → cloudId 唯一映射、MCP response envelope、Markdown inventory、continuation/cursor、payload limits、REST storage DOM inventory與 Rovo/REST page version 一致性。 |
+| `phase0/*.example.json` | 九類 fixture manifest、admin checklist 與 failure matrix 範本。實際 `.local.json` 不提交。 |
+| `tests/test_confluence_phase0.py` | Synthetic contract tests，涵蓋 schema mismatch、empty/malformed response、ambiguous Markdown、cursor loop、截斷上限、REST complex structure、event-loop guard 與 evidence secret redaction。 |
 ### PDF Reader 流程 (`python main.py pdf`)
 
 | 檔案 | 功能 |
@@ -324,6 +415,23 @@ src/
 - timestamp/time 類 sample value 會用目前 Unix timestamp 產生，避免固定舊時間。
 
 
+## 測試
+
+完整測試：
+
+```bash
+python -m unittest discover -s tests
+```
+
+只執行 Phase 0 contract tests：
+
+```bash
+python -m unittest tests.test_confluence_phase0 -v
+```
+
+Live Rovo/REST integration 不會在一般 test discovery 中執行；必須透過 `scripts/run_rovo_phase0.py` 明確 opt in。
+
+
 ## Codex 閱讀順序
 
 ### XMind 知識庫
@@ -357,6 +465,8 @@ src/
 - PDF Reader 不做 OCR；掃描版或圖片型 PDF 只輸出 validation report。
 - URL 靜態抓取不一定能處理 JavaScript render 的文件（Stoplight、Swagger UI、Redoc）。
 - User Behavior 目前是參考案例改寫，不是完整 business-flow payload composer。
+- Rovo MCP 目前只完成 Phase 0 runner，尚未接入 `main.py doc`、extractor 或 exporter；不得把 `status: pending` 視為 Hard Gate 通過。
+- Live Phase 0 需要 organization admin 設定、兩種測試 identity、受控 fixture pages 與 failure observations；repository 內只有 synthetic fixtures，不含 private Confluence body。
 
 
 ## Vendor Doc Reader 目前限制與改進方向

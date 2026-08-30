@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "name": "basic-content",
+      "kind": "basic_content",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000001/Phase0_Basic",
+      "markers": ["PHASE0_BASIC_BEGIN", "PHASE0_BASIC_END"],
+      "expected_min": {"heading_count": 4, "link_count": 1}
+    },
+    {
+      "name": "parameter-table",
+      "kind": "parameter_table",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000002/Phase0_Parameter_Table",
+      "markers": ["PHASE0_PARAMETER_TABLE"],
+      "expected_min": {"table_count": 1}
+    },
+    {
+      "name": "code-examples",
+      "kind": "code_examples",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000003/Phase0_Code_Examples",
+      "markers": ["PHASE0_JSON", "PHASE0_XML", "PHASE0_QUERY"],
+      "expected_min": {"code_fence_line_count": 6}
+    },
+    {
+      "name": "merged-nested-table",
+      "kind": "merged_nested_table",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000004/Phase0_Merged_Nested_Table",
+      "markers": ["PHASE0_MERGED_NESTED"]
+    },
+    {
+      "name": "tasks",
+      "kind": "tasks",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000005/Phase0_Tasks",
+      "markers": ["PHASE0_TASKS"],
+      "expected_min": {"task_count": 2}
+    },
+    {
+      "name": "macros",
+      "kind": "macro",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000006/Phase0_Macros",
+      "markers": ["PHASE0_EXPAND", "PHASE0_PANEL"]
+    },
+    {
+      "name": "embedded-content",
+      "kind": "embedded_content",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000007/Phase0_Embedded_Content",
+      "markers": ["PHASE0_ATTACHMENT", "PHASE0_ANCHOR"]
+    },
+    {
+      "name": "negative-control",
+      "kind": "empty_error",
+      "url": "https://company.atlassian.net/wiki/spaces/PRIVATE/pages/100000008/Phase0_Negative_Control",
+      "readable": false
+    },
+    {
+      "name": "long-content",
+      "kind": "long_content",
+      "url": "https://company.atlassian.net/wiki/spaces/SPACE/pages/100000009/Phase0_Long_Content",
+      "markers": ["PHASE0_LONG_BEGIN", "PHASE0_LONG_MIDDLE", "PHASE0_LONG_END"],
+      "end_marker": "PHASE0_LONG_END"
+    }
+  ]
+}

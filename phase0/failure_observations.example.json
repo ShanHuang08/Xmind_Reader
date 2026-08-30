@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "observations": {
+    "authentication": {"passed": false, "source": "live", "reference": "401 test run"},
+    "authorization": {"passed": false, "source": "live", "reference": "403 test run"},
+    "not_found_or_invisible": {"passed": false, "source": "live", "reference": "negative control"},
+    "rate_limit": {"passed": false, "source": "controlled-or-synthetic", "reference": ""},
+    "transport": {"passed": false, "source": "controlled-or-synthetic", "reference": ""},
+    "missing_tool": {"passed": false, "source": "synthetic", "reference": "unit test"},
+    "schema_mismatch": {"passed": false, "source": "synthetic", "reference": "unit test"},
+    "empty_page": {"passed": false, "source": "live", "reference": ""},
+    "malformed_payload": {"passed": false, "source": "synthetic", "reference": "unit test"},
+    "truncated_payload": {"passed": false, "source": "synthetic-and-live-long-page", "reference": ""},
+    "cursor_loop": {"passed": false, "source": "synthetic", "reference": "unit test"},
+    "safety_limit": {"passed": false, "source": "synthetic", "reference": "unit test"},
+    "version_mismatch": {"passed": false, "source": "synthetic", "reference": "unit test"},
+    "rest_failure": {"passed": false, "source": "controlled-or-synthetic", "reference": ""},
+    "async_context": {"passed": false, "source": "synthetic", "reference": "unit test"}
+  }
+}
