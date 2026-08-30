@@ -22,7 +22,7 @@ from exporters.json_exporter import (
 )
 from exporters.markdown_exporter import export_markdown
 from extractor.knowledge_extractor import extract_knowledge
-from parser.xmind_reader import XMindParseError, parse_xmind_file
+from xmind_reader.xmind_parser import XMindParseError, parse_xmind_file
 
 
 LOGGER = logging.getLogger(__name__)

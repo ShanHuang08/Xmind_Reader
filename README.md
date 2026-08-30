@@ -255,7 +255,7 @@ src/
 | 檔案 | 功能 |
 |---|---|
 | `xmind_reader_main.py` | 流程主控制器。解析 CLI 引數，依序呼叫 parser → extractor → chunker → exporter，並做增量處理決策（skip / full / incremental / preserve / raw_only）。 |
-| `parser/xmind_reader.py` | XMind 解析核心。解開 ZIP、自動偵測 `content.json` 或 `content.xml`，解析為 sheets → topics 樹狀結構，辨識 `case：` 開頭的測試用例並抽出結構化欄位；會讀取 `merge_key:`、markers、notes、labels、hyperlinks 等可支援欄位。 |
+| `xmind_reader/xmind_parser.py` | XMind 解析核心。解開 ZIP、自動偵測 `content.json` 或 `content.xml`，解析為 sheets → topics 樹狀結構，辨識 `case：` 開頭的測試用例並抽出結構化欄位；會讀取 `merge_key:`、markers、notes、labels、hyperlinks 等可支援欄位。 |
 | `extractor/knowledge_extractor.py` | 知識抽取。推斷 module / api_name，用 18 種關鍵字規則自動打 tags，抽取 validation_points / db_checks，計算 content_hash 供增量更新。 |
 | `chunker/knowledge_chunker.py` | 知識切分。依 module 和 tags 切分為 chunk，用 SequenceMatcher 偵測 ≥92% 相似度的疑似重複 case。 |
 | `exporters/json_exporter.py` | JSON 匯出。輸出 raw、source_meta、summary、extraction_report、duplicate_report、chunks。 |

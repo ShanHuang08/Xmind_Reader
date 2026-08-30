@@ -45,7 +45,7 @@ python3 run_new_vendor.py <vendor_name>
 此計畫適用於會影響以下任一範圍的修改：
 
 - `src/doc_reader/`
-- `src/parser/`
+- `src/xmind_reader/`
 - `src/generator/`
 - `src/xmind_writer/`
 - `src/pipeline/`

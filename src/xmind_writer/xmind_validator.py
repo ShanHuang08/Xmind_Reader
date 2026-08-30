@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from parser.xmind_reader import parse_xmind_file
+from xmind_reader.xmind_parser import parse_xmind_file
 
 
 def validate_generated_xmind(

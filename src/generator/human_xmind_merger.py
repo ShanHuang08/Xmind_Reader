@@ -16,7 +16,7 @@ from generator.draft_schema import (
     PRECONDITIONS_LABEL,
     REMARKS_LABEL,
 )
-from parser.xmind_reader import parse_xmind_file
+from xmind_reader.xmind_parser import parse_xmind_file
 
 
 HUMAN_OVERLAY_GENERATED_BY = "human-xmind-overlay/v1"
