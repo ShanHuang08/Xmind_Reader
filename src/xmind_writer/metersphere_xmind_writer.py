@@ -18,6 +18,7 @@ from generator.user_behavior_mapping import (
     BET_AND_SETTLE_CONFIG_SECTION,
     BET_SETTLE_GAME_CATEGORY,
     GAME_CATEGORY_MODULES,
+    PLAYER_GAME_STATUS_SECTION,
     automation_tag_for_output_section,
 )
 
@@ -125,7 +126,7 @@ def _ensure_fixed_user_behavior_categories(
     bet_and_settle_children = ["Bet config", "Settle config"]
     if _has_bet_and_settle_config_cases(test_cases):
         bet_and_settle_children.append("BetAndSettle config")
-    bet_and_settle_children.extend(["Special accounts", "Player / Game status"])
+    bet_and_settle_children.extend(["Special accounts", PLAYER_GAME_STATUS_SECTION])
     for title in bet_and_settle_children:
         _ensure_child(bet_and_settle, title)
     cancel_bet = _ensure_child(user_behavior, "Cancel Bet")
@@ -133,7 +134,7 @@ def _ensure_fixed_user_behavior_categories(
         "Main flow",
         "Cancel config",
         "Special accounts",
-        "Player / Game status",
+        PLAYER_GAME_STATUS_SECTION,
     ):
         _ensure_child(cancel_bet, title)
 

@@ -25,12 +25,13 @@ BET_CONFIG_SECTION = f"{BET_SETTLE_SECTION} > Bet config"
 SETTLE_CONFIG_SECTION = f"{BET_SETTLE_SECTION} > Settle config"
 BET_AND_SETTLE_CONFIG_SECTION = f"{BET_SETTLE_SECTION} > BetAndSettle config"
 BET_SETTLE_SPECIAL_ACCOUNTS = f"{BET_SETTLE_SECTION} > Special accounts"
-BET_SETTLE_STATUS = f"{BET_SETTLE_SECTION} > Player / Game status"
+PLAYER_GAME_STATUS_SECTION = "Player and Game status"
+BET_SETTLE_STATUS = f"{BET_SETTLE_SECTION} > {PLAYER_GAME_STATUS_SECTION}"
 
 CANCEL_MAIN_FLOW = f"{CANCEL_BET_SECTION} > Main flow"
 CANCEL_CONFIG_SECTION = f"{CANCEL_BET_SECTION} > Cancel config"
 CANCEL_SPECIAL_ACCOUNTS = f"{CANCEL_BET_SECTION} > Special accounts"
-CANCEL_STATUS = f"{CANCEL_BET_SECTION} > Player / Game status"
+CANCEL_STATUS = f"{CANCEL_BET_SECTION} > {PLAYER_GAME_STATUS_SECTION}"
 
 GAME_CATEGORY_MODULES = {
     "instant win": "Instant Win",
@@ -188,7 +189,7 @@ GENERATED_XMIND_STRUCTURE = {
                     "Settle config": [],
                     "BetAndSettle config": [],
                     "Special accounts": [],
-                    "Player / Game status": [],
+                    PLAYER_GAME_STATUS_SECTION: [],
                 }
             },
             "Cancel Bet": {
@@ -196,7 +197,7 @@ GENERATED_XMIND_STRUCTURE = {
                     "Main flow": [],
                     "Cancel config": [],
                     "Special accounts": [],
-                    "Player / Game status": [],
+                    PLAYER_GAME_STATUS_SECTION: [],
                 }
             },
         },
@@ -265,8 +266,8 @@ def map_user_behavior_case(
     cancel_scope = _is_cancel_scope(category, module, parts)
     if leaf == "special accounts":
         return _mapped(CANCEL_SPECIAL_ACCOUNTS if cancel_scope else BET_SETTLE_SPECIAL_ACCOUNTS, category, "cancel.special_accounts" if cancel_scope else "bet.special_accounts", "Explicit Special accounts source leaf.")
-    if leaf == "player / game status":
-        return _mapped(CANCEL_STATUS if cancel_scope else BET_SETTLE_STATUS, category, "cancel.player_game_status" if cancel_scope else "bet.player_game_status", "Explicit Player / Game status source leaf.")
+    if leaf in {"player / game status", "player and game status"}:
+        return _mapped(CANCEL_STATUS if cancel_scope else BET_SETTLE_STATUS, category, "cancel.player_game_status" if cancel_scope else "bet.player_game_status", "Explicit Player and Game status source leaf.")
     if leaf == "main flow":
         return _mapped(CANCEL_MAIN_FLOW if cancel_scope else BET_SETTLE_MAIN_FLOW, category, "cancel.main_flow" if cancel_scope else "bet.main_flow", "Explicit main flow source leaf.")
     if leaf == "cancel config":

@@ -173,6 +173,16 @@ class UserBehaviorRoutingTests(unittest.TestCase):
             "User Behavior > Bet and Settle > Settle config",
         )
 
+    def test_player_game_status_uses_metersphere_safe_name_and_accepts_legacy_source(self) -> None:
+        expected = "User Behavior > Bet and Settle > Player and Game status"
+        for leaf in ("Player / Game status", "Player and Game status"):
+            with self.subTest(leaf=leaf):
+                decision = map_user_behavior_case(
+                    "bet",
+                    {"module": leaf, "path": f"Mandatory > bet and settle > {leaf}"},
+                )
+                self.assertEqual(decision.output_section, expected)
+
     def test_title_fallback_applies_only_when_leaf_is_missing(self) -> None:
         reference = {
             "module": "bet and settle",
@@ -248,11 +258,11 @@ class UserBehaviorRoutingTests(unittest.TestCase):
             f"{prefix} > Bet and Settle > Bet config",
             f"{prefix} > Bet and Settle > Settle config",
             f"{prefix} > Bet and Settle > Special accounts",
-            f"{prefix} > Bet and Settle > Player / Game status",
+            f"{prefix} > Bet and Settle > Player and Game status",
             f"{prefix} > Cancel Bet > Main flow",
             f"{prefix} > Cancel Bet > Cancel config",
             f"{prefix} > Cancel Bet > Special accounts",
-            f"{prefix} > Cancel Bet > Player / Game status",
+            f"{prefix} > Cancel Bet > Player and Game status",
         }
         self.assertTrue(expected.issubset(titles))
         self.assertNotIn(

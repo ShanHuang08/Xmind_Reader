@@ -454,7 +454,7 @@ def _user_behavior_title_subcategory(reference_case: dict[str, Any]) -> str:
     if any(phrase in normalized_title for phrase in SPECIAL_ACCOUNT_TITLE_PHRASES):
         return "Special accounts"
     if any(phrase in normalized_title for phrase in PLAYER_GAME_STATUS_TITLE_PHRASES):
-        return "Player / Game status"
+        return "Player and Game status"
     return ""
 
 
@@ -469,7 +469,7 @@ def _behavior_module(output_section: str, reference_case: dict[str, Any]) -> str
         "BetAndSettle config",
         "Cancel config",
         "Special accounts",
-        "Player / Game status",
+        "Player and Game status",
     }:
         return leaf
     return str(reference_case.get("module") or output_section.split(">")[-1].strip())
