@@ -27,7 +27,7 @@ python main.py doc \
 
 ### 1.1 可行性與決策摘要
 
-整體可行性評估為 **8/10（高可行）**。CLI opt-in、`cloudId` discovery、`getConfluencePage`、service account authentication、既有流程隔離及 atomic publish 都有清楚的實作路徑。`getConfluencePage` 的正文格式已確定為 Markdown；主要風險收斂為 **Markdown 是否完整保留原 Confluence 頁面的表格、code block、checkbox 與連結語意，以及 `MarkdownDocumentParser` 是否能正確建立現有 extractor 所需的結構**。
+整體可行性評估為 **8/10（高可行）**。CLI opt-in、`cloudId` discovery、Rovo MCP v2 `getConfluenceContent`、service account authentication、既有流程隔離及 atomic publish 都有清楚的實作路徑。`getConfluenceContent` 可用 `detail="full"` 與 `content_format="markdown"` 要求完整 Markdown 正文；主要風險收斂為 **Markdown 是否完整保留原 Confluence 頁面的表格、code block、checkbox 與連結語意，以及 `MarkdownDocumentParser` 是否能正確建立現有 extractor 所需的結構**。
 
 因此本計畫採以下決策：
 
@@ -52,20 +52,21 @@ python main.py doc \
 
 ## 2. 已確認的外部條件
 
-以下條件以 2026-08-28 的 Atlassian 官方文件與目前 organization admin 畫面為基準，開發時仍須先執行 Phase 0 capability spike，避免把會變動的遠端能力寫死：
+以下條件以 2026-09-02 的 Atlassian 官方文件、目前 organization admin 畫面與本機 live probe 為基準，開發時仍須先執行 Phase 0 capability spike，避免把會變動的遠端能力寫死：
 
 - Rovo MCP 是 MCP-compatible client 到 Jira、Confluence 等 Atlassian Cloud app 的受控入口。
 - `getAccessibleAtlassianResources` 用來列出可存取 site 與 `cloudId`；其他工具呼叫需要明確傳入 `cloudId`。
-- `getConfluencePage` 可依 page ID 讀取 Confluence page/live doc，所需 scope 為 `read:page:confluence`；API token authentication 可使用此 read tool。
+- Rovo MCP v2 的 `getConfluenceContent` 可依 `content_url` 或 `content_id` 讀取 Confluence content；本服務固定要求 `detail="full"`、`content_format="markdown"`，並以 `include_metadata=true` 取得可用 metadata。Confluence read permission group 所需 scope 為 `read:confluence:agent-interface`，API token authentication 可使用此 read tool。
 - Non-interactive service 可使用 personal API token（Basic auth）或 service account API key（Bearer auth）。正式 service 優先採 service account，personal token 只供本機開發。
 - API token 不受 OAuth domain allowlist 控制，但仍受 token scope、Rovo MCP Permissions、使用者／service account 的 Confluence 權限及 organization IP allowlist 控制。
-- 舊 `/v1/sse` endpoint 在 2026-06-30 後不再支援。官方目前建議 API-token custom client 使用 `https://mcp.atlassian.com/v1/mcp/authv2`；Phase 0 仍須以 Basic 與 Bearer 的實際 handshake 驗證核准 endpoint。endpoint 由設定提供，不在 business logic 散落 hard-coded URL。
+- 本計畫的 Rovo contract baseline 是 v2 Streamable HTTP endpoint：`https://mcp.atlassian.com/v2/mcp`。舊 `/v1/sse` 已退役，`/v1/mcp/authv2` 與 v1 tool names 也不得作為本服務的 production contract。Phase 0 仍須以 Basic 與 Bearer 的實際 handshake 驗證核准 endpoint；endpoint 由設定提供，不在 business logic 散落 hard-coded URL。`?tools=all` 只供受控 capability/contract diagnostics，不是 production runtime 的預設 endpoint。
+- 本文件中的 **Rovo MCP v2** 指 MCP endpoint/tool contract；**Confluence REST API v2** 只指 `/wiki/api/v2/...` storage fallback。兩者是獨立 transport、credential 與 contract，不得因同為「v2」而混用。
 - 本功能不需要 Confluence Public Link。Rovo MCP 使用受驗證身分讀取 private page；是否可建立 public link 是另一個 write/sharing 功能，不在本計畫範圍。
 
 官方參考：
 
-- [Rovo MCP supported tools](https://support.atlassian.com/atlassian-rovo-mcp-server/docs/supported-tools/)
-- [API token authentication](https://support.atlassian.com/atlassian-rovo-mcp-server/docs/configuring-authentication-via-api-token/)
+- [Rovo MCP v2 supported tools](https://support.atlassian.com/atlassian-ai-gateway/docs/supported-tools/)
+- [Rovo MCP v2 API token authentication](https://support.atlassian.com/atlassian-ai-gateway/docs/configure-authentication-via-api-token/)
 - [Rovo MCP organization settings](https://support.atlassian.com/security-and-access-policies/docs/control-atlassian-rovo-mcp-server-settings/)
 - [Rovo MCP permissions](https://support.atlassian.com/security-and-access-policies/docs/Configure-Atlassian-Rovo-MCP-server-permission/)
 - [Official MCP Python SDK: client transports](https://github.com/modelcontextprotocol/python-sdk/blob/main/docs/client/transports.md)
@@ -184,8 +185,8 @@ ConfluencePageRef(
 - primary pattern 的 path segment 必須依序為 `wiki/spaces/<spaceKey>/pages/<numericPageId>/<pageSlug>`，不可只用模糊 substring matching；`viewpage.action` 必須恰有一個有效的正整數 `pageId`。
 - `spaceKey` 必須非空；目前已知 production examples 使用 `GA`，但 resolver 不把 `GA` 寫死，是否允許其他 space 由設定決定。
 - page ID 必須是正整數，解析後不得把 query、fragment 或標題當成 ID。
-- `pageSlug` 需做一次 percent-decoding 並保留作 metadata/logging；slug 不作 page identity，也不參與 `getConfluencePage` arguments。即使 slug 與頁面新標題不同，仍以 numeric page ID 讀取。
-- trailing slash、query 或 fragment 不得改變已解析的 site/space/page ID；不得把其中內容送入 MCP tool arguments。
+- `pageSlug` 需做一次 percent-decoding 並保留作 metadata/logging；slug 不作 page identity。送入 `getConfluenceContent.content_url` 前必須建立已驗證的 canonical HTTPS URL；即使 slug 與頁面新標題不同，仍以 numeric page ID 作 identity 與 response validation。
+- trailing slash、query 或 fragment 不得改變已解析的 site/space/page ID；送入 `content_url` 前移除 query 與 fragment，禁止把未驗證的 URL 原字串直接交給 MCP tool。
 - URL host 必須與 `getAccessibleAtlassianResources` 選到的 site URL 一致；0 個 match 或多個 match 都 fail closed。
 - 純 resolver 不執行網路；只有 short/display URL 會明確進入受限 redirect resolver。
 
@@ -215,8 +216,8 @@ https://<site>.atlassian.net/wiki/spaces/<space>/pages/<page_id>/<title>
 class RovoMcpClient:
     async def list_tools(self) -> set[str]: ...
     async def list_accessible_sites(self) -> list[AtlassianSite]: ...
-    async def get_confluence_page(
-        self, *, cloud_id: str, page_id: str
+    async def get_confluence_content(
+        self, *, cloud_id: str, content_url: str
     ) -> ConfluencePageContent: ...  # content_format="rovo_markdown"
 ```
 
@@ -230,18 +231,19 @@ class RovoMcpClient:
   ```text
   required（缺少即阻擋 MVP）：
   - getAccessibleAtlassianResources
-  - getConfluencePage
+  - getConfluenceContent
 
   optional（缺少不可阻擋 MVP）：
   - atlassianUserInfo
-  - getConfluencePageDescendants
-  - searchConfluenceUsingCql
-  - searchAtlassian / fetchAtlassian
+  - discover / executeRead
+  - listConfluenceContent / listConfluenceSpaces
+  - searchConfluence / search
   ```
 
   工具可能因 auth mode、token scope、organization permission 或 server 版本而不可見。錯誤需指出缺少哪個 required tool，但不可要求完整工具集合固定不變。
 - 先取得 accessible sites，再以 URL host 選定唯一 `cloudId`，禁止使用「第一個 site」。
-- MVP 對 Phase 0 已驗證的 `getConfluencePage` schema 使用 typed arguments；runtime 只檢查 required tool 是否存在及已知 required fields 是否相容，不動態遞迴組裝任意 arguments。Phase 0 將 tool schema 保存成去識別化 contract fixture；schema 不相容時 fail closed，透過更新 typed adapter 與 contract test 升級。
+- MVP 對 Phase 0 已驗證的 `getConfluenceContent` schema 使用 typed arguments：`cloudId`、經驗證且移除 query/fragment 的 `content_url`、`detail="full"`、`content_format="markdown"`、`include_metadata=true`。runtime 只檢查 required tool 是否存在及已知 required fields/enum 是否相容，不動態遞迴組裝任意 arguments。Phase 0 將 tool schema 保存成去識別化 contract fixture；schema 不相容時 fail closed，透過更新 typed adapter 與 contract test 升級。
+- `content_id` 是已驗證的相容替代輸入，但 MVP 不在 runtime 任意切換 `content_url`/`content_id`。若 Phase 0 決定改採 `content_id`，必須以 contract fixture 固定該選擇，並持續驗證 URL host、space 與 numeric page ID；不得因此放寬 URL allowlist。
 - decoder 只負責從 Phase 0 驗證過的 MCP response envelope 取得 Markdown body 與 page metadata。Markdown 可能位於 `structuredContent` 或 text content block，但對外一律回傳 `content_format="rovo_markdown"` 的 typed `ConfluencePageContent`；兩者同時存在時必須使用 Phase 0 確認的 authoritative location，不能拼接或深層 recursive key guessing。
 - Markdown body 缺失、不是 string、response envelope 不相容或具明確 truncation evidence 時，先回傳具體的 schema/fidelity/truncation error；只有第 4.2.2 節允許的情況可進入 REST storage fallback，不得改用一般 HTTP fetch、browser 或純文字猜測。
 - 只對 idempotent discovery/read call 重試 `429`、暫時性 `5xx` 與 transport disconnect；尊重 `Retry-After`，採 bounded exponential backoff + jitter。`401`、`403`、tool error、schema error 不重試。
@@ -295,7 +297,8 @@ CONFLUENCE_MAX_TOTAL_BYTES    # total payload safety limit
 
 安全要求：
 
-- 正式環境優先使用唯讀 service account。`read:account`、`read:me`、`read:page:confluence` 是待 Phase 0 驗證的最小 scope baseline，不可只憑文件假設足夠；新增 scope 必須記錄原因。
+- `ROVO_MCP_URL` 的 production baseline 為 `https://mcp.atlassian.com/v2/mcp`；設定若是 `/v1/sse`、`/v1/mcp/authv2` 或其他未核准 endpoint，啟動時必須 fail closed。
+- 正式環境優先使用唯讀 service account。Rovo MCP v2 的 Confluence baseline scope 是 `read:confluence:agent-interface`；`getAccessibleAtlassianResources` 所需的 user-context claims/scopes 必須由 token 建立設定與 Phase 0 live call 實證，不得沿用 v1 的 `read:account`、`read:me`、`read:page:confluence` 作為已確認的 v2 contract。新增 scope 必須記錄原因。
 - secret 只從 environment/secret manager 注入，不接受 CLI argument，不寫入 config file、`source_meta.json`、fixture、traceback 或 log。
 - Basic header 只在記憶體組合；所有 logging filter 必須遮蔽 `Authorization`、token、API key 與 email/token base64 value。
 - 啟動時驗證 URL、auth mode、required fields 與 allowed sites；不可在缺少設定時退回匿名 HTTP 或 Playwright。
@@ -311,7 +314,7 @@ OAuth domain allowlist 與 API-token deployment controls 必須分開描述。AP
 - [ ] Service account 已加入正確 Atlassian site，具有必要 product access。
 - [ ] Service account 是目標 space/page 的 viewer，且不可見不在 service scope 的敏感 space。
 - [ ] Service account/API key 能呼叫 `getAccessibleAtlassianResources`，並取得預期 `cloudId`。
-- [ ] Bearer auth 能看到並呼叫 `getConfluencePage`。
+- [ ] Bearer auth 能看到並呼叫 `getConfluenceContent`，且以 `detail="full"`、`content_format="markdown"` 取得正文。
 - [ ] Personal token 的 Basic auth 只用於 development verification，且不共用正式 service secret。
 - [ ] Audit log 能辨識該 service identity 的 read activity。
 - [ ] 若啟用 storage fallback，REST API v2 的唯讀 credential、page endpoint、storage response schema 與 audit activity 已獨立驗證。
@@ -495,25 +498,39 @@ python main.py new-vendor VendorName --confluence-url "https://.../pages/123/...
 
 Phase 0 在獨立 script/test 中完成，不接 production CLI，也不先寫正式 `MarkdownDocumentParser`。所有項目都要留下去識別化 evidence/fixture 與 pass/fail 結論。Phase 0 未簽核以前，Phase 1～5 不得開始。
 
-#### 0A. Admin 與 identity 驗證
+#### 0A. 既有 Phase 0 implementation 升級至 Rovo MCP v2
+
+目前已完成的 Phase 0 implementation 是 v1 contract，必須先完成下列 migration，才可執行新的 live gate；不得用臨時 Python probe 取代正式 Phase 0 runner：
+
+1. 將 endpoint validation/default 從 `/v1/mcp/authv2` 改為 `https://mcp.atlassian.com/v2/mcp`，並新增拒絕 v1 endpoint 的測試。
+2. 將 `REQUIRED_TOOLS` 的 `getConfluencePage` 改為 `getConfluenceContent`；保留 `getAccessibleAtlassianResources`。
+3. 將 page call typed arguments 改為 `cloudId`、`content_url`、`detail="full"`、`content_format="markdown"`、`include_metadata=true`；contract test 必須鎖定 required fields 與 enum values。
+4. 將 scope baseline 改為 `read:confluence:agent-interface`，並以 live evidence 記錄 `getAccessibleAtlassianResources` 所需 user-context claims/scopes。
+5. 更新 Markdown decoder、metadata/version extraction、truncation detection 與去識別化 v2 response/tool-schema fixtures；不得假設 v1 envelope 與 v2 相同。
+6. 更新 runner、runbook、example manifest、admin attestation、failure observations 與 evidence schema/version，使 evidence 清楚記錄 `rovo_contract_version="v2"`。
+7. 新增 migration regression tests，證明 v1 `getConfluencePage`、v1 arguments 與 v1 endpoint 不會被誤判為 v2 Phase 0 pass。
+8. 保持 production `doc_reader`、extractor、exporter 未接線；本 migration 只修改隔離的 Phase 0 implementation 與其測試/文件。
+
+#### 0B. Admin 與 identity 驗證
 
 1. 完成第 4.3 節 deployment checklist。
 2. 確認 organization 已啟用 API token authentication、Confluence Read permission 與正確 IP allowlist。
 3. 確認 service account 具有 site/product access，且能讀 fixture pages、不能讀 negative-control page。
 4. 分別測試 development personal token 的 Basic auth 與 production candidate service account 的 Bearer auth；記錄兩者可見工具差異。
-5. 驗證 API key/token 的 scopes，特別是 `read:account`、`read:me`、`read:page:confluence` 是否足以完成實際 calls。
+5. 驗證 API key/token 的 scopes，確認 `read:confluence:agent-interface` 與實際 user-context claims/scopes 能完成 required calls；記錄過多、缺少與最小可行 scope 組合。
 
-#### 0B. Transport 與 tool capability 驗證
+#### 0C. Transport 與 tool capability 驗證
 
-1. 對核准 endpoint（優先測試 `https://mcp.atlassian.com/v1/mcp/authv2`）完成 MCP handshake/`initialize`；確認未使用 `/v1/sse`。
+1. 對核准 endpoint `https://mcp.atlassian.com/v2/mcp` 完成 MCP handshake/`initialize`；確認未使用 `/v1/sse` 或 `/v1/mcp/authv2`。
 2. 執行 `list_tools()`，保存 required tools 的名稱、description、input schema 與 auth-mode 差異。
 3. 確認兩個 required tools 存在；optional tools 不納入 gate。
 4. 呼叫 `getAccessibleAtlassianResources`，確認 URL host 唯一 mapping 到預期 `cloudId`，且不使用第一筆資源作隱性 default。
-5. 使用 typed arguments 呼叫 `getConfluencePage`；保存成功 call 與 schema mismatch 的 contract fixture。
+5. 使用固定 typed arguments 呼叫 `getConfluenceContent`：`cloudId`、canonical `content_url`、`detail="full"`、`content_format="markdown"`、`include_metadata=true`；保存成功 call 與 schema mismatch 的 contract fixture。
+6. 驗證 `getConfluenceContent` 接受 canonical URL、正確處理尾端 slash，且 query/fragment 已由 client 移除；response identity 必須與 URL 解析出的 numeric page ID 一致。
 
-#### 0C. Response 與格式 fidelity 驗證
+#### 0D. Response 與格式 fidelity 驗證
 
-1. 對第 4.4.2 節九類 fixture pages 呼叫 `getConfluencePage`；長文 fixture 至少 >20,000 字，並含開頭、中段、末尾唯一 marker。
+1. 對第 4.4.2 節九類 fixture pages 呼叫 `getConfluenceContent(detail="full", content_format="markdown")`；長文 fixture 至少 >20,000 字，並含開頭、中段、末尾唯一 marker。
 2. 確認每次回傳都有 Markdown body；記錄它位於 `structuredContent` 或 text content block，以及兩者同時存在時的 authoritative location。
 3. 保存完整且去識別化的 response envelope，列舉 `hasMore`、`next`、cursor/continuation token、truncated/stop reason 等欄位；若可續讀，驗證逐頁順序、終止條件、重複 cursor 防護與 safety limits。
 4. 將 Rovo Markdown、原 Confluence fixture page 的人工結構清單及本機 DOC/HTML export 結果三方比對。
@@ -521,7 +538,7 @@ Phase 0 在獨立 script/test 中完成，不接 production CLI，也不先寫�
 6. 對同一批 page 呼叫 REST API v2 storage format，記錄 authentication、endpoint、response schema、page version 與 DOM inventory；使用 BeautifulSoup spike 驗證是否能補回 Rovo 遺失的必要結構。
 7. 模擬 `max_pages`、`max_total_bytes`、cursor loop、缺少末尾 marker、未閉合 code/table 與 Rovo/REST version race，確認都不會發布部分內容。
 
-#### 0C.1 Plan B 決策表
+#### 0D.1 Plan B 決策表
 
 Phase 0 必須留下逐 fixture 的明確決策，而不是只寫「評估 REST」：
 
@@ -532,7 +549,7 @@ Phase 0 必須留下逐 fixture 的明確決策，而不是只寫「評估 REST�
 | Rovo 與 REST 都無法還原必要結構，或 REST auth/version 無法可靠驗證 | Hard Gate 失敗；停止 production integration |
 | 只有 optional presentation detail 遺失 | 依資料等價性規則記 warning；不得把必要欄位降級為 optional |
 
-#### 0D. Failure matrix
+#### 0E. Failure matrix
 
 必須收集並分類以下結果：
 
@@ -549,8 +566,9 @@ Phase 0 必須留下逐 fixture 的明確決策，而不是只寫「評估 REST�
 
 #### Phase 0 Gate 通過條件
 
-- Basic 與 Bearer 都完成驗證；正式路徑的 Bearer auth 可成功 `initialize`、discover 與 read。
-- Bearer mode 可看到並呼叫 `getAccessibleAtlassianResources`、`getConfluencePage`，並正確選出目標 `cloudId`。
+- Basic 與 Bearer 都完成驗證；正式路徑的 Bearer auth 可成功 `initialize`、tool discovery 與 read。
+- Basic 與 Bearer mode 都使用 v2 endpoint，並能看到及呼叫 `getAccessibleAtlassianResources`、`getConfluenceContent`，正確選出目標 `cloudId` 並取得 full Markdown。
+- Phase 0 evidence 明確記錄 `rovo_contract_version="v2"`；v1 endpoint、`getConfluencePage` 或 v1 arguments 不得通過 gate。
 - Service account 的 site/product/page 權限模型與最小 scopes 已由實測確認。
 - 成功與 failure matrix 都能映射到第 8 節的 domain error，且不洩漏 secret/page body。
 - Markdown body 的 response envelope location、structured/text content priority、pagination/truncation、page version 與 >20,000 字長文末尾 marker 已有 fixture/結論。
@@ -574,7 +592,7 @@ Phase 0 必須留下逐 fixture 的明確決策，而不是只寫「評估 REST�
 1. 加入 pinned MCP SDK dependency。
 2. 實作 auth header provider、session lifecycle、tool capability check、site/cloudId resolution、pagination/truncation guard、read retries 與 error mapping。
 3. 實作 async-first `ConfluenceDocumentService.read(url)` 與 CLI-only `read_sync(url)`；service 回傳 `ConfluencePageContent` + remote metadata，不呼叫 extractor。
-4. `getConfluencePage` 使用 Phase 0 驗證過的 typed arguments；runtime schema check 只負責偵測相容性，不動態猜測 arguments。
+4. `getConfluenceContent` 使用 Phase 0 驗證過的 v2 typed arguments（`cloudId`、`content_url`、`detail="full"`、`content_format="markdown"`、`include_metadata=true`）；runtime schema check 只負責偵測相容性，不動態猜測 arguments。
 5. 使用 fake transport 測試完整 JSON-RPC/tool call contract，不以 mock internal SDK method 綁死實作細節。
 6. 若核准 fallback，實作 REST storage adapter與集中式 fallback policy；驗證只會由 fidelity/truncation errors 觸發，並拒絕跨版本內容。
 
@@ -605,7 +623,7 @@ Phase 0 必須留下逐 fixture 的明確決策，而不是只寫「評估 REST�
 - Alea、MegaFair、Groove 三個 canonical URL 必須分別解析出正確的 `ngvgs.atlassian.net`、`GA`、numeric page ID 與 page slug。
 - canonical URL、percent-encoded slug、trailing slash、query/fragment、非 HTTPS、錯誤 host、缺 space/page ID/slug、page ID 注入字元。
 - `/wiki/pages/viewpage.action?pageId=...` 直接解析；`/wiki/display/...` 與 `/wiki/x/...` 以 fake redirect chain 驗證成功、跨 host、loop、超過 redirect limit、無 numeric ID 與多候選情境；space homepage 必須回傳 `ConfluenceUrlResolutionError`。
-- slug 改名或與 page title 不同時仍使用 numeric page ID；slug、query、fragment 不得進入 `getConfluencePage` arguments。
+- slug 改名或與 page title 不同時仍以 numeric page ID 驗證 identity；`content_url` 必須是 allowlisted canonical URL，query、fragment 不得進入 `getConfluenceContent` arguments。
 - auth mode/config validation，並驗證 exception/log 的 secret redaction。
 - 0/1/multiple accessible site mapping。
 - 缺少 required tool、tool-level error、Markdown body 缺失、structured/text envelope location、unknown response schema。
@@ -619,7 +637,7 @@ Phase 0 必須留下逐 fixture 的明確決策，而不是只寫「評估 REST�
 
 ### 7.2 Contract tests
 
-- fake MCP server 驗證 initialize → list tools → accessible resources → get page 的 call order 與 arguments。
+- fake MCP v2 server 驗證 initialize → list tools → accessible resources → `getConfluenceContent` 的 call order，以及 `cloudId`、canonical `content_url`、`detail="full"`、`content_format="markdown"`、`include_metadata=true` arguments。
 - 以完整 Phase 0 fixture matrix 驗證 SDK/Markdown decoder；SDK 升級時 tool schema 與 Markdown envelope fixtures tests 必須先通過。
 - `MarkdownDocumentParser` output 必須能直接交給現有且未修改的 `extract_vendor_detail()`，不需要 Rovo-specific conditional。
 - 以 golden tests 鎖定既有 extractor functions；本功能的 implementation diff 不得包含 `src/doc_reader/doc_extractor.py` 或 `src/doc_reader/parameter_dependency.py` 的行為修改。
@@ -764,8 +782,8 @@ Rollback 時移除或停用 `--confluence-url` routing 即可；本機 doc branc
 
 - 組織目前 API token authentication 與 Confluence Read permission 的實際狀態為何？
 - Basic 與 Bearer authentication 實際各自可見哪些 tools？正式 Bearer path 是否能完成 required calls？
-- 核准使用的 Streamable HTTP endpoint 是否為官方目前建議的 `/v1/mcp/authv2`？以實際 token mode handshake 與 Atlassian 最新文件為準，禁止使用已退役 `/v1/sse`。
-- `getConfluencePage` 在此 auth mode 下的 runtime input schema，以及 Markdown body 位於哪個 response field/content block？
+- 核准的 `https://mcp.atlassian.com/v2/mcp` 是否能由 Basic 與 Bearer 完成 handshake、required calls 與 full Markdown read？任何 `/v1/*` endpoint 都不得成為 production contract。
+- `getConfluenceContent` 在兩種 auth mode 下的 runtime input schema 是否都支援 `cloudId`、`content_url`、`detail="full"`、`content_format="markdown"`、`include_metadata=true`，以及 Markdown body 位於哪個 response field/content block？
 - `structuredContent`、text content blocks 哪一個承載 authoritative Markdown；同時存在時內容是否等價？
 - Rovo Markdown 是否完整包含 tables、code blocks、tasks/checkboxes、links 與 page version metadata？
 - >20,000 字及超過預期 payload 上限的頁面是否會截斷或分頁？Envelope 是否提供 `hasMore`/`next`/cursor/continuation/truncated/stop reason，且如何證明最後一頁完整？

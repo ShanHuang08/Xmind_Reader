@@ -25,3 +25,6 @@ docs/
 *.doc
 *.pdf
 *.xlsx
+.env
+.env.rovo
+.env.*.local

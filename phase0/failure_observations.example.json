@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "observations": {
     "authentication": {"passed": false, "source": "live", "reference": "401 test run"},
     "authorization": {"passed": false, "source": "live", "reference": "403 test run"},

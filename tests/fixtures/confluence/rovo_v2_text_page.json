@@ -1,0 +1,10 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"content\":{\"id\":\"123456789\",\"version\":{\"number\":7},\"body\":{\"format\":\"markdown\",\"value\":\"# Text envelope\\n\\nPHASE0_BEGIN\\n\\nPHASE0_END\"},\"metadata\":{\"hasMore\":false}}}"
+    }
+  ],
+  "isError": false,
+  "resultType": "complete"
+}

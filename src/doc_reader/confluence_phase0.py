@@ -22,7 +22,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-REQUIRED_TOOLS = frozenset({"getAccessibleAtlassianResources", "getConfluencePage"})
+ROVO_CONTRACT_VERSION = "v2"
+ROVO_MCP_ENDPOINT = "https://mcp.atlassian.com/v2/mcp"
+EVIDENCE_SCHEMA_VERSION = 2
+INPUT_SCHEMA_VERSION = 2
+REQUIRED_TOOLS = frozenset({"getAccessibleAtlassianResources", "getConfluenceContent"})
 REQUIRED_FIXTURE_KINDS = frozenset(
     {
         "basic_content",
@@ -200,10 +204,27 @@ def parse_numeric_page_id(url: str) -> str:
     return page_id
 
 
+def canonical_content_url(url: str) -> str:
+    """Return the validated v2 content_url without query, fragment, or trailing slash."""
+
+    parsed = urllib.parse.urlsplit(url)
+    host = validate_https_site_url(url)
+    segments = [urllib.parse.unquote(segment) for segment in parsed.path.split("/") if segment]
+    if len(segments) < 6 or segments[:2] != ["wiki", "spaces"] or segments[3] != "pages":
+        raise Phase0ConfigurationError("Rovo MCP v2 Phase 0 requires a canonical Confluence page URL")
+    page_id = segments[4]
+    if not re.fullmatch(r"[1-9][0-9]*", page_id):
+        raise Phase0ConfigurationError("Confluence page ID must be a positive integer")
+    canonical_path = "/" + "/".join(urllib.parse.quote(segment, safe="") for segment in segments)
+    return urllib.parse.urlunsplit(("https", host, canonical_path.rstrip("/"), "", ""))
+
+
 def load_manifest(path: Path) -> Phase0Manifest:
     raw = json.loads(path.read_text(encoding="utf-8"))
-    if raw.get("schema_version") != 1 or not isinstance(raw.get("fixtures"), list):
-        raise Phase0ConfigurationError("Phase 0 manifest must use schema_version 1 and contain fixtures")
+    if raw.get("schema_version") != INPUT_SCHEMA_VERSION or not isinstance(raw.get("fixtures"), list):
+        raise Phase0ConfigurationError(
+            f"Phase 0 manifest must use schema_version {INPUT_SCHEMA_VERSION} and contain fixtures"
+        )
     fixtures: list[FixtureSpec] = []
     names: set[str] = set()
     for item in raw["fixtures"]:
@@ -240,17 +261,20 @@ def load_manifest(path: Path) -> Phase0Manifest:
             expected_min=expected_min,
         )
         fixture.page_id
+        canonical_content_url(fixture.url)
         fixtures.append(fixture)
         names.add(name)
-    return Phase0Manifest(schema_version=1, fixtures=tuple(fixtures))
+    return Phase0Manifest(schema_version=INPUT_SCHEMA_VERSION, fixtures=tuple(fixtures))
 
 
 def load_attestation(path: Path | None, required_keys: frozenset[str], label: str) -> dict[str, Any]:
     if path is None:
         return {"status": "pending", "missing": sorted(required_keys), "observations": {}}
     raw = json.loads(path.read_text(encoding="utf-8"))
-    if raw.get("schema_version") != 1 or not isinstance(raw.get("observations"), Mapping):
-        raise Phase0ConfigurationError(f"{label} must use schema_version 1 and contain observations")
+    if raw.get("schema_version") != INPUT_SCHEMA_VERSION or not isinstance(raw.get("observations"), Mapping):
+        raise Phase0ConfigurationError(
+            f"{label} must use schema_version {INPUT_SCHEMA_VERSION} and contain observations"
+        )
     observations: dict[str, dict[str, Any]] = {}
     for key, value in raw["observations"].items():
         if key not in required_keys or not isinstance(value, Mapping):
@@ -286,12 +310,19 @@ def manifest_preflight(manifest: Phase0Manifest) -> dict[str, Any]:
 
 def auth_config_from_env(mode: str, env: Mapping[str, str] | None = None) -> AuthConfig:
     values = os.environ if env is None else env
-    endpoint = values.get("ROVO_MCP_URL", "https://mcp.atlassian.com/v1/mcp/authv2").strip()
+    endpoint = values.get("ROVO_MCP_URL", ROVO_MCP_ENDPOINT).strip()
     endpoint_parts = urllib.parse.urlsplit(endpoint)
-    if endpoint_parts.scheme != "https" or endpoint_parts.hostname != "mcp.atlassian.com":
-        raise Phase0ConfigurationError("ROVO_MCP_URL must be the approved HTTPS Atlassian MCP host")
-    if endpoint_parts.path.rstrip("/").endswith("/sse"):
-        raise Phase0ConfigurationError("The retired /sse endpoint is forbidden")
+    if (
+        endpoint_parts.scheme != "https"
+        or endpoint_parts.hostname != "mcp.atlassian.com"
+        or endpoint_parts.port not in (None, 443)
+        or endpoint_parts.username
+        or endpoint_parts.password
+        or endpoint_parts.path.rstrip("/") != "/v2/mcp"
+        or endpoint_parts.query
+        or endpoint_parts.fragment
+    ):
+        raise Phase0ConfigurationError(f"ROVO_MCP_URL must be exactly {ROVO_MCP_ENDPOINT}")
     allowed_sites = tuple(
         sorted(
             {
@@ -365,6 +396,47 @@ def walk_json(value: Any, path: str = "$") -> Iterable[tuple[str, str | None, An
             yield from walk_json(child, f"{path}[{index}]")
 
 
+def decoded_payload_roots(result: Any) -> list[tuple[str, Any]]:
+    """Return structured content and JSON text blocks from an MCP tool result."""
+
+    dumped = object_to_json(result)
+    if not isinstance(dumped, Mapping):
+        return []
+    roots: list[tuple[str, Any]] = []
+    structured = dumped.get("structuredContent") or dumped.get("structured_content")
+    if structured is not None:
+        roots.append(("$.structuredContent", structured))
+    for index, block in enumerate(dumped.get("content", [])):
+        if not isinstance(block, Mapping) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            roots.append((f"$.content[{index}].text(json)", json.loads(text)))
+        except json.JSONDecodeError:
+            continue
+    return roots
+
+
+def content_payload_objects(result: Any) -> Iterable[Mapping[str, Any]]:
+    """Yield only known v2 content wrappers, avoiding unrelated nested object IDs."""
+
+    queue = [root for _, root in decoded_payload_roots(result) if isinstance(root, Mapping)]
+    seen: set[int] = set()
+    while queue:
+        payload = queue.pop(0)
+        identity = id(payload)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        yield payload
+        for wrapper in ("content", "data", "result"):
+            child = payload.get(wrapper)
+            if isinstance(child, Mapping):
+                queue.append(child)
+
+
 def _looks_like_markdown(text: str) -> bool:
     return bool(text.strip()) and (
         "\n" in text
@@ -428,14 +500,21 @@ def truncation_evidence(result: Any) -> dict[str, Any]:
     dumped = object_to_json(result)
     signals: list[dict[str, Any]] = []
     cursors: list[dict[str, str]] = []
-    for path, key, value in walk_json(dumped):
-        normalized = (key or "").replace("_", "").lower()
-        if normalized in {"truncated", "hasmore"} and isinstance(value, bool):
-            signals.append({"path": path, "value": value})
-        elif normalized == "stopreason" and isinstance(value, str):
-            signals.append({"path": path, "value": value})
-        elif normalized in _CURSOR_NAMES and isinstance(value, str) and value:
-            cursors.append({"path": path, "value_hash": stable_identifier(value), "raw": value})
+    roots = [("$", dumped), *decoded_payload_roots(result)]
+    seen: set[tuple[str, str]] = set()
+    for root_path, root in roots:
+        for path, key, value in walk_json(root, root_path):
+            normalized = (key or "").replace("_", "").lower()
+            signature = (path, repr(value))
+            if signature in seen:
+                continue
+            seen.add(signature)
+            if normalized in {"truncated", "hasmore"} and isinstance(value, bool):
+                signals.append({"path": path, "value": value})
+            elif normalized == "stopreason" and isinstance(value, str):
+                signals.append({"path": path, "value": value})
+            elif normalized in _CURSOR_NAMES and isinstance(value, str) and value:
+                cursors.append({"path": path, "value_hash": stable_identifier(value), "raw": value})
     truncated = any(item["value"] is True for item in signals if isinstance(item["value"], bool))
     truncated = truncated or any(
         isinstance(item["value"], str) and item["value"].strip().lower() not in _COMPLETED_STOP_REASONS
@@ -450,11 +529,9 @@ def truncation_evidence(result: Any) -> dict[str, Any]:
 
 
 def extract_page_version(result: Any) -> int | None:
-    dumped = object_to_json(result)
     versions: set[int] = set()
-    for _, key, value in walk_json(dumped):
-        if (key or "").lower() != "version":
-            continue
+    for payload in content_payload_objects(result):
+        value = payload.get("version")
         if isinstance(value, int) and not isinstance(value, bool):
             versions.add(value)
         elif isinstance(value, Mapping):
@@ -522,20 +599,9 @@ def validate_inventory(inventory: Mapping[str, Any], fixture: FixtureSpec) -> li
 
 
 def extract_resources(result: Any) -> list[dict[str, str]]:
-    dumped = object_to_json(result)
-    roots: list[Any] = []
-    if isinstance(dumped, dict):
-        if dumped.get("structuredContent") is not None:
-            roots.append(dumped["structuredContent"])
-        for block in dumped.get("content", []):
-            if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str):
-                try:
-                    roots.append(json.loads(block["text"]))
-                except json.JSONDecodeError:
-                    pass
     resources: dict[tuple[str, str], dict[str, str]] = {}
-    for root in roots:
-        for _, _, node in walk_json(root):
+    for root_path, root in decoded_payload_roots(result):
+        for _, _, node in walk_json(root, root_path):
             if not isinstance(node, Mapping):
                 continue
             url = node.get("url") or node.get("siteUrl")
@@ -567,11 +633,35 @@ def validate_required_tools(tool_names: Iterable[str]) -> None:
         raise Phase0CapabilityError("Missing required tools: " + ", ".join(missing))
 
 
-def build_page_arguments(schema: Mapping[str, Any], cloud_id: str, page_id: str, cursor: str = "") -> dict[str, Any]:
+def _require_enum_value(schema: Mapping[str, Any], property_name: str, expected: str) -> None:
+    properties = schema.get("properties", {})
+    property_schema = properties.get(property_name, {}) if isinstance(properties, Mapping) else {}
+    enum = property_schema.get("enum", []) if isinstance(property_schema, Mapping) else []
+    if not isinstance(enum, list) or expected not in enum:
+        raise Phase0CapabilityError(
+            f"getConfluenceContent schema must allow {property_name}={expected!r}"
+        )
+
+
+def build_content_arguments(
+    schema: Mapping[str, Any], cloud_id: str, content_url: str, cursor: str = ""
+) -> dict[str, Any]:
     names = _tool_argument_names(schema)
-    if not {"cloudId", "pageId"}.issubset(names):
-        raise Phase0CapabilityError("getConfluencePage schema must expose cloudId and pageId")
-    arguments: dict[str, Any] = {"cloudId": cloud_id, "pageId": page_id}
+    required_names = {"cloudId", "content_url", "detail", "content_format", "include_metadata"}
+    if not required_names.issubset(names):
+        missing = sorted(required_names - names)
+        raise Phase0CapabilityError(
+            "getConfluenceContent schema is missing required v2 properties: " + ", ".join(missing)
+        )
+    _require_enum_value(schema, "detail", "full")
+    _require_enum_value(schema, "content_format", "markdown")
+    arguments: dict[str, Any] = {
+        "cloudId": cloud_id,
+        "content_url": canonical_content_url(content_url),
+        "detail": "full",
+        "content_format": "markdown",
+        "include_metadata": True,
+    }
     if cursor:
         for candidate in ("cursor", "continuationToken", "next"):
             if candidate in names:
@@ -582,11 +672,32 @@ def build_page_arguments(schema: Mapping[str, Any], cloud_id: str, page_id: str,
     return arguments
 
 
+def extract_content_id(result: Any) -> str | None:
+    content_ids: set[str] = set()
+    for payload in content_payload_objects(result):
+        for key in ("id", "contentId", "content_id", "pageId", "page_id"):
+            value = payload.get(key)
+            candidate = str(value) if isinstance(value, (str, int)) and not isinstance(value, bool) else ""
+            if re.fullmatch(r"[1-9][0-9]*", candidate):
+                content_ids.add(candidate)
+    if len(content_ids) > 1:
+        raise Phase0ResponseError("MCP response contains conflicting numeric content IDs")
+    return next(iter(content_ids)) if content_ids else None
+
+
+def validate_response_content_id(result: Any, expected_page_id: str) -> None:
+    actual = extract_content_id(result)
+    if actual is None:
+        raise Phase0ResponseError("Rovo MCP v2 response is missing a numeric content ID")
+    if actual != expected_page_id:
+        raise Phase0ResponseError("Rovo MCP v2 response content ID does not match the requested page")
+
+
 def classify_exception(exc: BaseException) -> str:
     text = str(exc).lower()
     if "401" in text or "unauth" in text or "token" in text and "expired" in text:
         return "authentication"
-    if "403" in text or "forbidden" in text or "permission" in text:
+    if "403" in text or "forbidden" in text or "permission" in text or "scope claim" in text:
         return "authorization"
     if "404" in text or "not found" in text:
         return "not_found_or_invisible"
@@ -601,6 +712,34 @@ def classify_exception(exc: BaseException) -> str:
     if isinstance(exc, Phase0ResponseError):
         return "response_schema"
     return "unknown"
+
+
+def root_cause_exception(exc: BaseException) -> BaseException:
+    """Prefer an actionable Phase 0 leaf from SDK/AnyIO exception groups."""
+
+    children = getattr(exc, "exceptions", None)
+    if not isinstance(children, tuple) or not children:
+        return exc
+    leaves = [root_cause_exception(child) for child in children]
+    return next((leaf for leaf in leaves if isinstance(leaf, Phase0Error)), leaves[0])
+
+
+def tool_error_message(result: Any, tool_name: str) -> str:
+    dumped = object_to_json(result)
+    if isinstance(dumped, Mapping):
+        for block in dumped.get("content", []):
+            if not isinstance(block, Mapping) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if not isinstance(text, str):
+                continue
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, Mapping) and isinstance(parsed.get("message"), str):
+                return parsed["message"]
+    return f"{tool_name} returned a tool error"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -671,7 +810,7 @@ async def _read_fixture(
     client: Any,
     fixture: FixtureSpec,
     cloud_id: str,
-    page_schema: Mapping[str, Any],
+    content_schema: Mapping[str, Any],
     max_pages: int,
     max_total_bytes: int,
 ) -> tuple[str, dict[str, Any], Any]:
@@ -681,14 +820,15 @@ async def _read_fixture(
     seen_cursors: set[str] = set()
     last_result: Any = None
     for page_number in range(1, max_pages + 1):
-        arguments = build_page_arguments(page_schema, cloud_id, fixture.page_id, cursor)
-        result = await client.call_tool("getConfluencePage", arguments)
+        arguments = build_content_arguments(content_schema, cloud_id, fixture.url, cursor)
+        result = await client.call_tool("getConfluenceContent", arguments)
         last_result = result
         candidates, envelope = markdown_candidates_from_result(result)
         envelope["page_number"] = page_number
         envelopes.append(envelope)
         if envelope["is_error"]:
-            raise Phase0ResponseError("getConfluencePage returned a tool error")
+            raise Phase0ResponseError(tool_error_message(result, "getConfluenceContent"))
+        validate_response_content_id(result, fixture.page_id)
         chunks.append(choose_authoritative_markdown(candidates).text)
         if sum(len(chunk.encode("utf-8")) for chunk in chunks) > max_total_bytes:
             raise Phase0TruncationError("MCP content exceeded max_total_bytes")
@@ -724,6 +864,7 @@ async def run_auth_mode(
         raise Phase0ConfigurationError("Install requirements-phase0.txt before a live Phase 0 run") from exc
 
     mode_evidence: dict[str, Any] = {
+        "rovo_contract_version": ROVO_CONTRACT_VERSION,
         "auth_mode": config.mode,
         "endpoint_path": urllib.parse.urlsplit(config.endpoint).path,
         "started_at": utc_now(),
@@ -746,13 +887,15 @@ async def run_auth_mode(
             validate_required_tools(tools)
             resources_result = await client.call_tool("getAccessibleAtlassianResources", {})
             if bool(getattr(resources_result, "is_error", False)):
-                raise Phase0ResponseError("getAccessibleAtlassianResources returned a tool error")
+                raise Phase0ResponseError(
+                    tool_error_message(resources_result, "getAccessibleAtlassianResources")
+                )
             resources = extract_resources(resources_result)
             mode_evidence["sites"] = [
                 {"host": item["host"], "cloud_id_hash": stable_identifier(item["cloud_id"])} for item in resources
             ]
-            page_schema = object_to_json(tools["getConfluencePage"]).get("inputSchema") or object_to_json(
-                tools["getConfluencePage"]
+            content_schema = object_to_json(tools["getConfluenceContent"]).get("inputSchema") or object_to_json(
+                tools["getConfluenceContent"]
             ).get("input_schema", {})
             for fixture in manifest.fixtures:
                 fixture_evidence: dict[str, Any] = {
@@ -765,9 +908,13 @@ async def run_auth_mode(
                     "status": "fail",
                 }
                 try:
+                    if fixture.site_host not in config.allowed_sites:
+                        raise Phase0ConfigurationError(
+                            f"Fixture host {fixture.site_host} is not in ROVO_MCP_ALLOWED_SITES"
+                        )
                     cloud_id = select_cloud_id(resources, fixture.site_host)
                     markdown, envelope, last_result = await _read_fixture(
-                        client, fixture, cloud_id, page_schema, max_pages, max_total_bytes
+                        client, fixture, cloud_id, content_schema, max_pages, max_total_bytes
                     )
                     if not fixture.readable:
                         raise Phase0ResponseError("Negative-control page was unexpectedly readable")
@@ -808,6 +955,63 @@ async def run_auth_mode(
     return mode_evidence
 
 
+async def read_page_markdown(
+    url: str,
+    config: AuthConfig,
+    max_pages: int = 20,
+    max_total_bytes: int = 8 * 1024 * 1024,
+) -> str:
+    """Read one canonical Confluence URL through the verified Rovo MCP v2 contract.
+
+    This is an explicit development smoke/read mode. It does not create Phase 0 evidence and
+    cannot satisfy the nine-fixture hard gate.
+    """
+
+    canonical_url = canonical_content_url(url)
+    site_host = validate_https_site_url(canonical_url)
+    if site_host not in config.allowed_sites:
+        raise Phase0ConfigurationError(f"Page host {site_host} is not in ROVO_MCP_ALLOWED_SITES")
+    if max_pages < 1 or max_total_bytes < 1:
+        raise Phase0ConfigurationError("max_pages and max_total_bytes must be positive")
+
+    try:
+        import httpx2
+        from mcp import Client
+        from mcp.client.streamable_http import streamable_http_client
+    except ImportError as exc:
+        raise Phase0ConfigurationError("Install requirements-phase0.txt before a live Rovo read") from exc
+
+    timeout = httpx2.Timeout(30.0, read=config.timeout_seconds)
+    async with httpx2.AsyncClient(
+        headers={"Authorization": config.authorization},
+        timeout=timeout,
+        follow_redirects=False,
+    ) as http_client:
+        transport = streamable_http_client(config.endpoint, http_client=http_client)
+        async with Client(transport) as client:
+            listed = await client.list_tools()
+            tools = {tool.name: tool for tool in listed.tools}
+            validate_required_tools(tools)
+            resources_result = await client.call_tool("getAccessibleAtlassianResources", {})
+            if bool(getattr(resources_result, "is_error", False)):
+                raise Phase0ResponseError(
+                    tool_error_message(resources_result, "getAccessibleAtlassianResources")
+                )
+            cloud_id = select_cloud_id(extract_resources(resources_result), site_host)
+            tool = object_to_json(tools["getConfluenceContent"])
+            content_schema = tool.get("inputSchema") or tool.get("input_schema", {})
+            fixture = FixtureSpec("direct-read", "basic_content", canonical_url)
+            markdown, _, _ = await _read_fixture(
+                client,
+                fixture,
+                cloud_id,
+                content_schema,
+                max_pages,
+                max_total_bytes,
+            )
+            return markdown
+
+
 def build_pending_evidence(
     manifest: Phase0Manifest,
     modes: Sequence[str],
@@ -816,8 +1020,10 @@ def build_pending_evidence(
     failure_observations: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": EVIDENCE_SCHEMA_VERSION,
         "phase": 0,
+        "rovo_contract_version": ROVO_CONTRACT_VERSION,
+        "rovo_endpoint_path": "/v2/mcp",
         "generated_at": utc_now(),
         "sdk_pin": "mcp==2.1.1",
         "status": "pending",
@@ -841,8 +1047,10 @@ async def run_phase0(
 ) -> dict[str, Any]:
     preflight = manifest_preflight(manifest)
     evidence: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": EVIDENCE_SCHEMA_VERSION,
         "phase": 0,
+        "rovo_contract_version": ROVO_CONTRACT_VERSION,
+        "rovo_endpoint_path": "/v2/mcp",
         "generated_at": utc_now(),
         "sdk_pin": "mcp==2.1.1",
         "status": "fail",
