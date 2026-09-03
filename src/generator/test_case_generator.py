@@ -1563,6 +1563,7 @@ def _parameter_steps(
                 code,
                 error_response,
             ),
+            _step_case(f"{parameter_name} Input 0", f'"{parameter_name}": 0', code, error_response),
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
                 _amount_request_line(parameter, "-100.0"),
@@ -1849,6 +1850,7 @@ def _optional_parameter_steps(
                 endpoint,
                 context.get("parameter_error", {}),
             ),
+            _success_step_case(f"{parameter_name} Input 0", f'"{parameter_name}": 0', success_response),
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
                 _amount_request_line(parameter, "-100.0"),
@@ -2387,20 +2389,20 @@ def _success_response(endpoint: dict[str, Any]) -> dict[str, Any]:
 def _wrong_data_type_request_line(parameter: dict[str, Any]) -> str:
     name = str(parameter.get("name", "parameter"))
     param_type = str(parameter.get("type", "")).lower()
-    if _is_string_type(param_type):
-        return f'"{name}": 123'
     if _is_numeric_type(param_type) or "bool" in param_type:
         return f'"{name}": "test"'
+    if _is_string_type(param_type):
+        return f'"{name}": 123'
     return f'"{name}": 123'
 
 
 def _wrong_data_type_step_title(parameter: dict[str, Any]) -> str:
     name = str(parameter.get("name", "parameter"))
     param_type = str(parameter.get("type", "")).lower()
-    if _is_string_type(param_type):
-        return f"{name} input int"
     if _is_numeric_type(param_type) or "bool" in param_type:
         return f"{name} input string"
+    if _is_string_type(param_type):
+        return f"{name} input int"
     return f"{name} input wrong data type"
 
 

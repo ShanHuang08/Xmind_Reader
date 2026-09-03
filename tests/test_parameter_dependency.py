@@ -175,6 +175,22 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
         self.assertIn('"bet": "-1|txn-001"', steps[-4]["step"])
         self.assertIn('"bet": "100.12345678|txn-001"', steps[-2]["step"])
 
+    def test_amount_parameters_include_zero_value_step(self) -> None:
+        steps = _parameter_steps(
+            {},
+            {"request_example": {"amount": 100.0}},
+            {"name": "amount", "type": "decimal", "required": "Y"},
+            {"code": "BAD_REQUEST"},
+        )
+
+        zero_step = next(step for step in steps if step["step"].startswith("amount Input 0"))
+        self.assertIn('"amount": 0', zero_step["step"])
+        titles = [step["step"].split("\n", 1)[0] for step in steps]
+        self.assertLess(
+            titles.index("amount Input 9 decimal numbers"),
+            titles.index("amount Input 0"),
+        )
+
     def test_compiles_explicit_rules_without_vendor_hardcode(self) -> None:
         endpoints = [
             {
