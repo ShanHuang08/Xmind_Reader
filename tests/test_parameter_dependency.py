@@ -8,6 +8,8 @@ from generator.test_case_generator import (
     _normal_request_value,
     _parameter_steps,
     _parameter_validation_cases,
+    _is_timestamp_parameter,
+    _is_time_string_parameter,
     _space_request_line,
 )
 
@@ -63,6 +65,70 @@ class ParameterDependencyCompilerTests(unittest.TestCase):
         self.assertEqual(len(whitespace_steps), 1)
         self.assertIn('"userId": " 1e9lqcg8ddui "', whitespace_steps[0]["step"])
         self.assertIn("error code 309", whitespace_steps[0]["expected"])
+
+    def test_requested_at_includes_wrong_format_time_string_step(self) -> None:
+        steps = _parameter_steps(
+            {"error_codes": [{"code": "BAD_REQUEST", "context": "Invalid requestedAt"}]},
+            {"request_example": {"requestedAt": "2020-03-12T15:22:31Z"}},
+            {"name": "requestedAt", "type": "String", "required": "Y"},
+            {"code": "BAD_REQUEST"},
+        )
+
+        titles = [step["step"].split("\n", 1)[0] for step in steps]
+        self.assertEqual(
+            titles[:4],
+            [
+                "requestedAt doesn't set",
+                "requestedAt leave blank",
+                "requestedAt input space",
+                "requestedAt input int",
+            ],
+        )
+        wrong_format = next(
+            step for step in steps if step["step"].startswith("requestedAt input wrong format")
+        )
+        self.assertIn('"requestedAt": "2020-03-12"', wrong_format["step"])
+
+    def test_timestamp_and_time_string_parameters_are_separate(self) -> None:
+        self.assertTrue(
+            _is_time_string_parameter(
+                {"request_example": {"requestedAt": "2020-03-12T15:22:31Z"}},
+                {"name": "requestedAt", "type": "String"},
+            )
+        )
+        self.assertFalse(_is_timestamp_parameter({"name": "requestedAt"}))
+        self.assertTrue(_is_timestamp_parameter({"name": "timestamp"}))
+        self.assertFalse(
+            _is_time_string_parameter(
+                {"request_example": {"timestamp": "2020-03-12T15:22:31Z"}},
+                {"name": "timestamp", "type": "timestamp"},
+            )
+        )
+
+    def test_date_only_string_is_not_time_string(self) -> None:
+        self.assertFalse(
+            _is_time_string_parameter(
+                {"request_example": {"requestedAt": "2020-03-12"}},
+                {"name": "requestedAt", "type": "String"},
+            )
+        )
+
+    def test_supported_iso_time_string_formats_are_detected(self) -> None:
+        values = (
+            "2026-09-03T14:30:00",
+            "2026-09-03T14:30:00Z",
+            "2026-09-03T14:30:00+08:00",
+            "2026-09-03T14:30:00.123+08:00",
+            "2026-09-03T14:30:00+0800",
+        )
+        for value in values:
+            with self.subTest(value=value):
+                self.assertTrue(
+                    _is_time_string_parameter(
+                        {"request_example": {"requestedAt": value}},
+                        {"name": "requestedAt", "type": "String"},
+                    )
+                )
 
     def test_user_identity_parameters_have_uppercase_validation(self) -> None:
         for name in ("userId", "playerId", "uid", "nickname", "bet/userId", "win/userId"):

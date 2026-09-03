@@ -1657,6 +1657,16 @@ def _parameter_steps(
             )
         )
 
+    if _is_time_string_parameter(endpoint, parameter):
+        steps.append(
+            _step_case(
+                f"{parameter_name} input wrong format",
+                f'"{parameter_name}": "2020-03-12"',
+                code,
+                error_response,
+            )
+        )
+
     if _is_pipe_amount_parameter(parameter):
         _, transaction_value = _pipe_amount_components(endpoint, parameter)
         max_decimals = _infer_amount_decimal_places(endpoint, parameter)
@@ -2416,6 +2426,28 @@ def _is_timestamp_parameter(parameter: dict[str, Any]) -> bool:
     name = str(parameter.get("name", "")).lower()
     description = str(parameter.get("description", "")).lower()
     return "timestamp" in name or name == "time" or "unix time" in description or "timestamp" in description
+
+
+def _is_time_string_parameter(endpoint: dict[str, Any], parameter: dict[str, Any]) -> bool:
+    """Return whether a string parameter's example is a loose ISO-8601 datetime."""
+    if not _is_string_type(str(parameter.get("type", "")).lower()):
+        return False
+
+    try:
+        value = json.loads(_normal_request_value(endpoint, parameter))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(value, str):
+        return False
+
+    # Require a time component, while allowing common ISO-8601 variants such
+    # as missing seconds, fractional seconds, Z, or a numeric offset.
+    return bool(
+        re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?",
+            value,
+        )
+    )
 
 
 def _is_array_parameter(parameter: dict[str, Any]) -> bool:
