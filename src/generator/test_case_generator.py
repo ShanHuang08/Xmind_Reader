@@ -1624,7 +1624,7 @@ def _parameter_steps(
     if leaf_name == "currency":
         steps.append(
             _step_case_for_error(
-                f"{parameter_name} Input invalid currency",
+                "Input invalid currency",
                 f'"{parameter_name}": "TWD"',
                 context,
                 endpoint,
