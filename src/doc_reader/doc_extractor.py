@@ -57,6 +57,7 @@ def extract_vendor_detail(parsed: dict[str, Any], vendor_name: str) -> dict[str,
             operation_variants.get(endpoint.get("endpoint", ""), []),
         )
         _attach_endpoint_examples(endpoint, error_codes, endpoint_examples.get(endpoint.get("endpoint", ""), {}))
+        _annotate_nullable_parameters(endpoint)
     checklist = _extract_vendor_master_checklist(parsed)
     game_codes = _extract_game_codes(parsed)
     profile = _capability_profile(vendor_name, text, endpoints, checklist)
@@ -196,6 +197,60 @@ def _parameter_rows(table: list[list[str]]) -> list[dict[str, str]]:
         if item.get("name"):
             rows.append(item)
     return rows
+
+
+def _annotate_nullable_parameters(endpoint: dict[str, Any]) -> None:
+    """Record documented nullability on request parameters.
+
+    Nullability may be stated in the parameter description/remark or be
+    demonstrated by a documented request example containing a JSON null.
+    Keep the original text and add a small structured flag for generators.
+    """
+    variants = endpoint.get("operation_variants", [])
+    if not isinstance(variants, list):
+        variants = []
+    _annotate_parameter_list(
+        endpoint.get("request_parameters", []),
+        [endpoint.get("request_example")],
+    )
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        _annotate_parameter_list(
+            variant.get("request_parameters", []),
+            [variant.get("request_example"), *variant.get("request_examples", [])]
+            if isinstance(variant.get("request_examples", []), list)
+            else [variant.get("request_example")],
+        )
+
+
+def _annotate_parameter_list(
+    parameters: Any,
+    request_examples: list[Any],
+) -> None:
+    if not isinstance(parameters, list):
+        return
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        description = " ".join(
+            str(parameter.get(field, ""))
+            for field in ("description", "remark")
+        ).lower()
+        documented_nullable = bool(
+            re.search(r"\b(?:can|may)\s+be\s+null\b|\bnullable\b", description)
+        )
+        example_nullable = any(
+            isinstance(example, dict)
+            and str(parameter.get("name", "")).split("/")[0] in example
+            and example.get(str(parameter.get("name", "")).split("/")[0]) is None
+            for example in request_examples
+        )
+        if documented_nullable or example_nullable:
+            parameter["nullable"] = True
+            parameter["nullable_source"] = (
+                "documented_description" if documented_nullable else "request_example"
+            )
 
 
 def _attach_endpoint_examples(

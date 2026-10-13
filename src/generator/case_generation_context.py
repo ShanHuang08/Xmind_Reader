@@ -8,6 +8,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from generator.multi_error_policy import resolve as resolve_multi_error_policy
+
 
 def load_draft(path: Path | str) -> dict[str, Any]:
     draft_path = Path(path)
@@ -24,6 +26,11 @@ def save_draft(draft: dict[str, Any], path: Path | str) -> Path:
 
 def build_generation_context(draft: dict[str, Any]) -> dict[str, Any]:
     """Return the subset of draft data needed by deterministic generators."""
+    parameter_error = _select_parameter_error(
+        draft.get("error_codes", []),
+        draft.get("endpoint_roles", []),
+        vendor=str(draft.get("vendor", "")),
+    )
     return {
         "vendor": draft.get("vendor", ""),
         "source_files": draft.get("source_files", {}),
@@ -39,9 +46,8 @@ def build_generation_context(draft: dict[str, Any]) -> dict[str, Any]:
         "generation_mapping": draft.get("generation_mapping", {}),
         "case_authoring_rules": draft.get("case_authoring_rules", {}),
         "default_test_account": _default_test_account(draft),
-        "parameter_error": _select_parameter_error(
-            draft.get("error_codes", []), draft.get("endpoint_roles", [])
-        ),
+        "parameter_error": parameter_error,
+        "parameter_error_candidates": _context_parameter_error_candidates(draft, parameter_error),
         "encryption_error": _select_encryption_error(draft.get("error_codes", [])),
     }
 
@@ -59,7 +65,10 @@ def _account_from_vendor(vendor: str, today: date | None = None) -> str:
 
 
 def _select_parameter_error(
-    error_codes: list[dict[str, Any]], endpoints: list[dict[str, Any]] | None = None
+    error_codes: list[dict[str, Any]],
+    endpoints: list[dict[str, Any]] | None = None,
+    *,
+    vendor: str = "",
 ) -> dict[str, Any]:
     for item in error_codes:
         text = " ".join(str(item.get(key, "")) for key in ("code", "context", "message", "description"))
@@ -103,6 +112,14 @@ def _select_parameter_error(
             "description": description,
         }
 
+    multi_error = resolve_multi_error_policy(
+        vendor=vendor,
+        candidate_errors=[{"code": code, "context": description} for code, description in remaining],
+        mutation_kind="default",
+    )
+    if multi_error:
+        return multi_error
+
     endpoint_error = _parameter_error_from_endpoint_examples(endpoints or [])
     if endpoint_error:
         return endpoint_error
@@ -110,6 +127,63 @@ def _select_parameter_error(
     raise ValueError(
         "No documented parameter validation error code or endpoint error response example was found."
     )
+
+
+def _parameter_error_candidates(error_codes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expose documented non-excluded candidates for future step-level policies."""
+    for item in error_codes:
+        text = " ".join(
+            str(item.get(key, "")) for key in ("code", "context", "message", "description")
+        )
+        lowered = re.sub(r"[_-]+", " ", text.lower())
+        if any(
+            marker in lowered
+            for marker in (
+                "bad parameter",
+                "bad parameters",
+                "bad request",
+                "invalid request",
+                "invalid parameter",
+                "invalid parameters",
+                "parameters are missing or invalid",
+            )
+        ):
+            return [
+                {
+                    "code": str(item.get("code", "")).strip(),
+                    "context": str(
+                        item.get("context") or item.get("message") or item.get("description") or ""
+                    ).strip(),
+                }
+            ]
+
+    candidates: list[dict[str, Any]] = []
+    for item in error_codes:
+        code = str(item.get("code", "")).strip()
+        description = str(
+            item.get("context") or item.get("message") or item.get("description") or ""
+        ).strip()
+        if not code or code in {"0", "ok", "OK", "success", "SUCCESS"}:
+            continue
+        # Hub88 uses INVALID_TOKEN for a syntactically valid but unknown
+        # token. Keep that documented candidate available to the token
+        # parameter policy; TOKEN_EXPIRED remains behavior-only.
+        if code == "RS_ERROR_INVALID_TOKEN":
+            candidates.append({"code": code, "context": description})
+            continue
+        if _non_parameter_error_reason(code, description):
+            continue
+        candidates.append({"code": code, "context": description})
+    return candidates
+
+
+def _context_parameter_error_candidates(
+    draft: dict[str, Any], selected: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Keep a multi-error candidate set only when policy selected the case."""
+    if selected.get("selection") == "multi_error_policy":
+        return _parameter_error_candidates(draft.get("error_codes", []))
+    return [selected] if selected.get("code") else []
 
 
 def _select_encryption_error(error_codes: list[dict[str, Any]]) -> dict[str, str]:

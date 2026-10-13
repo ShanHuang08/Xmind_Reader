@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from generator.case_generation_context import build_generation_context, load_draft, save_draft
+from generator.multi_error_policy import (
+    resolve as resolve_multi_error_policy,
+    resolve_behavior as resolve_multi_error_behavior,
+)
 from generator.draft_schema import (
     API_PARAMETER_CASE_TITLE_TEMPLATE,
     API_PARAMETER_TEST_SECTION,
@@ -420,7 +424,7 @@ def _user_behavior_case(
         },
         "unresolved_questions": [],
     }
-    case["expected_error"] = _behavior_expected_error(context)
+    case["expected_error"] = _behavior_expected_error(context, case_category, scenario)
     return case
 
 
@@ -575,7 +579,22 @@ def _behavior_remarks(context: dict[str, Any], category: str) -> str:
     return _generic_behavior_remarks(category)
 
 
-def _behavior_expected_error(context: dict[str, Any]) -> dict[str, Any]:
+def _behavior_expected_error(
+    context: dict[str, Any], category: str = "", scenario: str = ""
+) -> dict[str, Any]:
+    """fallback when no parameter error is explicitly defined"""
+    behavior_error = resolve_multi_error_behavior(
+        vendor=str(context.get("vendor", "")),
+        error_codes=context.get("error_codes", []),
+        category=category,
+        scenario=scenario,
+    )
+    if behavior_error:
+        return {
+            "code": str(behavior_error.get("code", "")),
+            "source": str(behavior_error.get("source", "documented")),
+            "description": str(behavior_error.get("description", "")),
+        }
     parameter_error = context.get("parameter_error", {})
     code = str(parameter_error.get("code") or "UNKNOWN_ERROR")
     description = str(parameter_error.get("description") or parameter_error.get("context") or "Error")
@@ -1477,6 +1496,66 @@ def _error_for_keywords(
     return None
 
 
+def _insufficient_funds_error(context: dict[str, Any]) -> dict[str, str] | None:
+    """Find a documented insufficient-funds error for negative amounts."""
+    patterns = (
+        r"insufficient\s+(?:funds?|balance|money)",
+        r"(?:funds?|balance|money)\s+is\s+insufficient",
+        r"not\s+enough\s+(?:funds?|money|balance)",
+        r"insufficient",
+    )
+    for item in context.get("error_codes", []):
+        text = " ".join(
+            str(item.get(key, ""))
+            for key in ("code", "context", "message", "description")
+        ).lower().replace("_", " ").replace("-", " ")
+        if any(re.search(pattern, text) for pattern in patterns):
+            code = str(item.get("code", "")).strip()
+            if code:
+                return {
+                    "code": code,
+                    "source": "documented",
+                    "description": str(
+                        item.get("context") or item.get("message") or item.get("description") or ""
+                    ),
+                }
+    return None
+
+
+def _negative_amount_error(context: dict[str, Any]) -> dict[str, str] | None:
+    """Find a documented error stating that an amount cannot be negative."""
+    patterns = (
+        r"amount.{0,40}(?:cannot|can't|must not|should not|not allowed).{0,20}negative",
+        r"negative.{0,40}amount",
+        r"amount.{0,40}(?:non[- ]negative|positive only)",
+    )
+    for item in context.get("error_codes", []):
+        text = " ".join(
+            str(item.get(key, ""))
+            for key in ("code", "context", "message", "description")
+        ).lower().replace("_", " ").replace("-", " ")
+        if any(re.search(pattern, text) for pattern in patterns):
+            code = str(item.get("code", "")).strip()
+            if code:
+                return {
+                    "code": code,
+                    "source": "documented",
+                    "description": str(
+                        item.get("context") or item.get("message") or item.get("description") or ""
+                    ),
+                }
+    return None
+
+
+def _is_bet_or_debit_endpoint(endpoint: dict[str, Any]) -> bool:
+    role = str(endpoint.get("role", "")).lower()
+    path = str(endpoint.get("endpoint", "")).lower()
+    operation = str(
+        endpoint.get("endpoint_operation") or endpoint.get("operation") or ""
+    ).lower()
+    return role == "bet" or operation in {"bet", "debit"} or "/debit" in path or path.endswith("/bet")
+
+
 def _preconditions(
     context: dict[str, Any], endpoint: dict[str, Any]
 ) -> str:
@@ -1504,6 +1583,75 @@ def _remarks(endpoint: dict[str, Any], parameter: dict[str, Any]) -> str:
         f"{response}\n"
         "</code>"
     )
+
+
+def _step_error(
+    context: dict[str, Any],
+    endpoint: dict[str, Any],
+    parameter: dict[str, Any],
+    fallback: dict[str, Any],
+    mutation_kind: str,
+) -> dict[str, Any]:
+    """Select an error for one step without inventing undocumented codes."""
+    candidates = context.get("parameter_error_candidates", [])
+    if not isinstance(candidates, list) or len(candidates) < 2:
+        return fallback
+    fallback_code = str(fallback.get("code", "")).strip()
+    default_code = str(context.get("parameter_error", {}).get("code", "")).strip()
+    candidate_codes = {
+        str(item.get("code", "")).strip()
+        for item in candidates
+        if isinstance(item, dict)
+    }
+    # Endpoint/parameter-specific documented errors take precedence over the
+    # generic multi-error policy. This keeps gameCode/currency special cases
+    # precise while still requiring the selected code to come from JSON.
+    if fallback_code and fallback_code in candidate_codes and fallback_code != default_code:
+        return fallback
+    selected = resolve_multi_error_policy(
+        vendor=str(context.get("vendor", "")),
+        candidate_errors=candidates,
+        mutation_kind=mutation_kind,
+        parameter=parameter,
+        endpoint=endpoint,
+    )
+    if selected:
+        return selected
+    raise ValueError(
+        "Multiple documented parameter error codes require a matching multi-error policy: "
+        f"vendor={context.get('vendor', '')!r}, parameter={parameter.get('name', '')!r}, "
+        f"mutation_kind={mutation_kind!r}"
+    )
+
+
+def _step_error_args(
+    context: dict[str, Any],
+    endpoint: dict[str, Any],
+    parameter: dict[str, Any],
+    fallback: dict[str, Any],
+    mutation_kind: str,
+) -> tuple[str, str]:
+    selected = _step_error(context, endpoint, parameter, fallback, mutation_kind)
+    return (
+        _required_parameter_error_code(selected),
+        _json_block(_expected_error_response(context, endpoint, selected)),
+    )
+
+
+def _is_nullable_parameter(parameter: dict[str, Any]) -> bool:
+    if parameter.get("nullable") is True:
+        return True
+    text = " ".join(
+        str(parameter.get(field, "")) for field in ("description", "remark")
+    ).lower()
+    return bool(re.search(r"\b(?:can|may)\s+be\s+null\b|\bnullable\b", text))
+
+
+def _blank_step(parameter: dict[str, Any]) -> tuple[str, str]:
+    name = str(parameter.get("name", "parameter"))
+    if _is_nullable_parameter(parameter):
+        return f"{name} input null", f'"{name}": null'
+    return f"{name} leave blank", f'"{name}": ""'
 
 
 def _parameter_steps(
@@ -1538,19 +1686,67 @@ def _parameter_steps(
     if "amount" in leaf_name:
         valid_decimal, invalid_decimal = _amount_decimal_cases(endpoint, parameter)
         success_response = _json_block(_success_response(endpoint))
+        missing_code, missing_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "missing"
+        )
+        blank_code, blank_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "blank"
+        )
+        blank_title, blank_request = _blank_step(parameter)
+        exceed_fallback = (
+            _insufficient_funds_error(context)
+            if _is_bet_or_debit_endpoint(endpoint)
+            else None
+        ) or expected_error
+        exceed_error = _step_error(
+            context,
+            endpoint,
+            parameter,
+            exceed_fallback,
+            "exceed_digits",
+        )
+        exceed_code = _required_parameter_error_code(exceed_error)
+        exceed_response = _json_block(
+            _expected_error_response(context, endpoint, exceed_error)
+        )
+        precision_code, precision_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "decimal_precision"
+        )
+        zero_code, zero_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "zero"
+        )
+        negative_fallback = _negative_amount_error(context) or expected_error
+        negative_error = _step_error(
+            context,
+            endpoint,
+            parameter,
+            negative_fallback,
+            "negative",
+        )
+        space_code, space_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "space"
+        )
+        string_code, string_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "wrong_type"
+        )
         steps = [
             _step_case(
                 f"{parameter_name} doesn't set",
                 f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}',
-                code,
-                error_response,
+                missing_code,
+                missing_response,
             ),
-            _step_case(f"{parameter_name} Input blank", f'"{parameter_name}": ""', code, error_response),
+            _step_case(
+                blank_title.replace("leave blank", "Input blank"),
+                blank_request,
+                blank_code,
+                blank_response,
+            ),
             _step_case(
                 f"{parameter_name} Input exceed 20 digit numbers",
                 _amount_request_line(parameter, "123456789012345678901"),
-                code,
-                error_response,
+                exceed_code,
+                exceed_response,
             ),
             _success_step_case(
                 valid_decimal[0],
@@ -1560,25 +1756,34 @@ def _parameter_steps(
             _step_case(
                 invalid_decimal[0],
                 invalid_decimal[1],
-                code,
-                error_response,
+                precision_code,
+                precision_response,
             ),
-            _step_case(f"{parameter_name} Input 0", f'"{parameter_name}": 0', code, error_response),
+            _step_case(
+                f"{parameter_name} Input 0",
+                f'"{parameter_name}": 0',
+                zero_code,
+                zero_response,
+            ),
             _step_case_for_error(
                 f"{parameter_name} Input negative number",
                 _amount_request_line(parameter, "-100.0"),
                 context,
                 endpoint,
-                _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
-                or expected_error,
+                negative_error,
             ),
             _step_case(
                 f"{parameter_name} Input space",
                 _space_request_line(endpoint, parameter),
-                code,
-                error_response,
+                space_code,
+                space_response,
             ),
-            _step_case(f"{parameter_name} Input string", f'"{parameter_name}": "test"', code, error_response),
+            _step_case(
+                f"{parameter_name} Input string",
+                f'"{parameter_name}": "test"',
+                string_code,
+                string_response,
+            ),
         ]
         if _is_rollback_endpoint(endpoint):
             steps.append(
@@ -1590,21 +1795,57 @@ def _parameter_steps(
             )
         return steps
 
+    missing_code, missing_response = _step_error_args(
+        context, endpoint, parameter, expected_error, "missing"
+    )
     steps.append(
         _step_case(
             f"{parameter_name} doesn't set",
             f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}',
-            code,
-            error_response,
+            missing_code,
+            missing_response,
         )
     )
+    blank_code, blank_response = _step_error_args(
+        context, endpoint, parameter, expected_error, "blank"
+    )
+    blank_title, blank_request = _blank_step(parameter)
     steps.append(
         _step_case(
-            f"{parameter_name} leave blank",
-            f'"{parameter_name}": ""',
-            code,
-            error_response,
+            blank_title,
+            blank_request,
+            blank_code,
+            blank_response,
         )
+    )
+    space_fallback = expected_error
+    if leaf_name in {"gamecode", "game_code"}:
+        space_fallback = _error_for_keywords(
+            context,
+            ("invalid game", "unknown game", "game code", "game_code"),
+        ) or expected_error
+    elif leaf_name == "currency":
+        space_fallback = _error_for_keywords(
+            context,
+            (
+                "currency mismatch",
+                "invalid currency",
+                "wrong_currency",
+                "currency differs",
+                "wallet currency",
+            ),
+        ) or expected_error
+    space_error = _step_error(
+        context,
+        endpoint,
+        parameter,
+        (
+            _error_for_keywords(context, ("unknown userid", "unknown user id", "user not found"))
+            or space_fallback
+        )
+        if leaf_name == "userid"
+        else space_fallback,
+        "space",
     )
     steps.append(
         _step_case_for_error(
@@ -1612,12 +1853,7 @@ def _parameter_steps(
             _space_request_line(endpoint, parameter),
             context,
             endpoint,
-            (
-                _error_for_keywords(context, ("unknown userid", "unknown user id", "user not found"))
-                or expected_error
-            )
-            if leaf_name == "userid"
-            else expected_error,
+            space_error,
         )
     )
 
@@ -1628,43 +1864,71 @@ def _parameter_steps(
                 f'"{parameter_name}": "TWD"',
                 context,
                 endpoint,
-                _error_for_keywords(context, ("currency mismatch", "invalid currency")) or expected_error,
+                _step_error(
+                    context,
+                    endpoint,
+                    parameter,
+                    _error_for_keywords(
+                        context,
+                        (
+                            "currency mismatch",
+                            "invalid currency",
+                            "wrong_currency",
+                            "currency differs",
+                            "wallet currency",
+                        ),
+                    )
+                    or expected_error,
+                    "invalid_value",
+                ),
             )
         )
     elif _is_timestamp_parameter(parameter):
+        wrong_type_code, wrong_type_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "wrong_type"
+        )
         steps.append(
             _step_case(
                 _wrong_data_type_step_title(parameter),
                 _wrong_data_type_request_line(parameter),
-                code,
-                error_response,
+                wrong_type_code,
+                wrong_type_response,
             )
+        )
+        format_code, format_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "invalid_format"
         )
         steps.append(
             _step_case(
                 f"{parameter_name} Input shorter timestamp",
                 f'"{parameter_name}": 1722345',
-                code,
-                error_response,
+                format_code,
+                format_response,
             )
         )
     else:
+        wrong_type_code, wrong_type_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "wrong_type"
+        )
         steps.append(
             _step_case(
                 _wrong_data_type_step_title(parameter),
                 _wrong_data_type_request_line(parameter),
-                code,
-                error_response,
+                wrong_type_code,
+                wrong_type_response,
             )
         )
 
     if _is_time_string_parameter(endpoint, parameter):
+        format_code, format_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "invalid_format"
+        )
         steps.append(
             _step_case(
                 f"{parameter_name} input wrong format",
                 f'"{parameter_name}": "2020-03-12"',
-                code,
-                error_response,
+                format_code,
+                format_response,
             )
         )
 
@@ -1690,22 +1954,31 @@ def _parameter_steps(
                 f"{invalid_decimal}|{transaction_value}",
             ),
         ):
+            mutation_kind = "wrong_type" if "input string" in title else "invalid_format"
+            if "doesn't set" in title:
+                mutation_kind = "missing"
+            elif "negative" in title:
+                mutation_kind = "negative"
             steps.append(
                 _step_case(
                     title,
                     f'"{parameter_name}": "{value}"',
-                    code,
-                    error_response,
+                    *_step_error_args(
+                        context, endpoint, parameter, expected_error, mutation_kind
+                    ),
                 )
             )
 
     if _is_user_identity_parameter(parameter) or _is_uppercase_action_parameter(parameter):
+        uppercase_code, uppercase_response = _step_error_args(
+            context, endpoint, parameter, expected_error, "invalid_value"
+        )
         steps.append(
             _step_case(
                 f"{parameter_name} input uppercase",
                 _uppercase_action_request_line(endpoint, parameter),
-                code,
-                error_response,
+                uppercase_code,
+                uppercase_response,
             )
         )
     return steps
@@ -1826,13 +2099,18 @@ def _optional_parameter_steps(
     elif "amount" in leaf_name:
         valid_decimal, invalid_decimal = _amount_decimal_cases(endpoint, parameter)
         success_response = _json_block(_success_response(endpoint))
+        blank_title, blank_request = _blank_step(parameter)
         steps = [
             _success_step_case(
                 f"{parameter_name} doesn't set",
                 _optional_amount_missing_request_line(parameter),
                 success_response,
             ),
-            _success_step_case(f"{parameter_name} Input blank", f'"{parameter_name}": ""', success_response),
+            _success_step_case(
+                blank_title.replace("leave blank", "Input blank"),
+                blank_request,
+                success_response,
+            ),
             _success_step_case(
                 f"{parameter_name} Input exceed 20 digit numbers",
                 _amount_request_line(parameter, "123456789012345678901"),
@@ -1856,7 +2134,7 @@ def _optional_parameter_steps(
                 _amount_request_line(parameter, "-100.0"),
                 context,
                 endpoint,
-                _error_for_keywords(context, ("insufficient funds", "insufficient balance"))
+                _insufficient_funds_error(context)
                 or context.get("parameter_error", {}),
             ),
             _success_step_case(
@@ -1876,9 +2154,10 @@ def _optional_parameter_steps(
             )
         return steps
     else:
+        blank_title, blank_request = _blank_step(parameter)
         specs = [
             (f"{parameter_name} doesn't set", f'// "{parameter_name}": {_normal_request_value(endpoint, parameter)}'),
-            (f"{parameter_name} leave blank", f'"{parameter_name}": ""'),
+            (blank_title, blank_request),
             (f"{parameter_name} input space", _space_request_line(endpoint, parameter)),
             (
                 _wrong_data_type_step_title(parameter),
