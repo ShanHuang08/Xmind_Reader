@@ -17,13 +17,21 @@ Input/evidence schema version: 2
 Rovo MCP v2 is separate from the optional Confluence REST API v2 storage fallback. The two paths
 have independent endpoints, credentials, schemas, and evidence.
 
-## 1. Prepare the isolated runtime
+## 1. Install dependencies in the computer's Python environment
 
-Python 3.10 or newer is required. Install only the Phase 0 dependencies:
+Python 3.10 or newer is required. This project does not require a virtual environment. Install the
+Phase 0 dependencies into the current user's normal Python environment:
 
 ```powershell
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-phase0.txt
+py -3.12 -m pip install --user --upgrade pip
+py -3.12 -m pip install --user -r requirements-phase0.txt
+```
+
+macOS / Linux:
+
+```bash
+python3 -m pip install --user --upgrade pip
+python3 -m pip install --user -r requirements-phase0.txt
 ```
 
 The MCP SDK is pinned to `mcp==2.1.1`; changing it invalidates the saved tool-schema contract and
@@ -121,7 +129,7 @@ not be placed in `.env.rovo` for this gate.
 ## 5. Preflight
 
 ```powershell
-.venv\Scripts\python.exe scripts\run_rovo_phase0.py `
+py -3.12 scripts\run_rovo_phase0.py `
   --manifest phase0\fixture_manifest.local.json `
   --admin-attestation phase0\admin_attestation.local.json `
   --failure-observations phase0\failure_observations.local.json `
@@ -144,7 +152,7 @@ set -a
 source .env.rovo
 set +a
 
-PYTHONPATH=src .venv/bin/python scripts/run_rovo_phase0.py \
+PYTHONPATH=src python3 scripts/run_rovo_phase0.py \
   --read-url "https://ngvgs.atlassian.net/wiki/spaces/GA/pages/1471053840/Vendor_Alea" \
   --auth-mode personal
 ```
@@ -156,7 +164,7 @@ terminal, does not write evidence, and cannot count as a Phase 0 hard-gate pass.
 ### Run the full hard gate
 
 ```powershell
-.venv\Scripts\python.exe scripts\run_rovo_phase0.py `
+py -3.12 scripts\run_rovo_phase0.py `
   --manifest phase0\fixture_manifest.local.json `
   --auth-mode personal `
   --auth-mode service_account `
@@ -182,8 +190,15 @@ rovo_endpoint_path: /v2/mcp
 
 ```powershell
 $env:PYTHONPATH = "src"
-.venv\Scripts\python.exe -m unittest tests.test_confluence_phase0 -v
-.venv\Scripts\python.exe -m unittest discover -s tests
+py -3.12 -m unittest tests.test_confluence_phase0 -v
+py -3.12 -m unittest discover -s tests
+```
+
+macOS / Linux:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_confluence_phase0 -v
+PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
 Synthetic fixtures contain no private page content. Real evidence belongs under `phase0-evidence/`,

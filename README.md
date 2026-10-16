@@ -23,23 +23,32 @@
 
 另有一個與 production pipeline 隔離的 **Rovo MCP Confluence Phase 0 capability spike**，用來驗證 private Confluence page 的唯讀存取、Markdown fidelity、截斷／分頁行為與 REST storage-format 備援可行性。Phase 0 通過前，不會接入 `main.py doc`。
 
+## 近期更新
+
+- Rovo MCP contract 已升級至 v2：使用 `https://mcp.atlassian.com/v2/mcp`、`getAccessibleAtlassianResources` 與 `getConfluenceContent`。
+- Phase 0 runner 新增 `--read-url`，可直接將單一 private Confluence page 讀成 Markdown 並輸出到終端；此模式不是完整 Hard Gate。
+- API parameter generator 支援 vendor-specific multi-error policy；同一 Vendor 有多個文件化錯誤碼時，會依 mutation kind 選擇對應錯誤，不再任意套用單一 fallback。
+- Doc extractor 會從 parameter description 或 request example 標記 nullable 欄位；generator 對這類欄位產生 JSON `null` 測項，而不是空字串。
+- ISO-8601 time string 新增 wrong-format 測項；numeric/bool 的 wrong-type 測項優先使用 string，數值欄位也會覆蓋 `0`、負數與 decimal boundary。
+- Currency validation step 統一命名為 `Input invalid currency`，並持續優先匹配文件化的 currency error。
+
 
 ## 安裝方式
 
-### Windows
+本專案直接使用電腦上已安裝的 Python，不要求建立 virtual environment。建議 Python 3.10 以上，並使用 user-site 安裝，避免需要系統管理員權限。
+
+### Windows（PowerShell / Command Prompt）
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+py -3.12 -m pip install --user --upgrade pip
+py -3.12 -m pip install --user -r requirements.txt
 ```
 
 ### macOS / Linux
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python3 -m pip install --user --upgrade pip
+python3 -m pip install --user -r requirements.txt
 ```
 
 主要依賴：`lxml`、`python-docx`、`beautifulsoup4`、`markdownify`、`pymupdf4llm`。
@@ -47,7 +56,11 @@ python3 -m pip install -r requirements.txt
 如需執行 Rovo MCP Phase 0，另安裝隔離依賴：
 
 ```bash
-pip install -r requirements-phase0.txt
+# Windows
+py -3.12 -m pip install --user -r requirements-phase0.txt
+
+# macOS / Linux
+python3 -m pip install --user -r requirements-phase0.txt
 ```
 
 Phase 0 目前固定使用 `mcp==2.1.1`。SDK 升級會使既有 tool-schema contract 失效，必須重新執行 Phase 0。
@@ -69,14 +82,31 @@ Production pipeline 統一透過 `main.py` 進入，支援 `xmind`、`doc`、`pd
 
 ```bash
 # 掃描 input_xmind/ 列出可處理檔案
-python main.py xmind
+python3 main.py xmind
 
-# 指定單一檔案
-python main.py xmind --input EGTDigital_test_cases.xmind
+# 使用完整參數讀取單一 XMind，輸出至指定知識庫目錄
+python3 main.py xmind \
+  --input input_xmind/user_behavior_map.xmind \
+  --output xmind_detail \
+  --vendor User_Behavior_map \
+  --log-level INFO
 
-# 指定 Vendor 名稱
-python main.py xmind --input EGTDigital_test_cases.xmind --vendor EGTDigital
+# 強制重新產生，包含新版內容比既有輸出更小的情況
+python3 main.py xmind \
+  --input input_xmind/user_behavior_map.xmind \
+  --output xmind_detail \
+  --vendor User_Behavior_map \
+  --force \
+  --log-level INFO
 ```
+
+參數說明：
+
+- `--input`：XMind 檔案、`input_xmind/` 下的檔名，或包含多個 `.xmind` 的目錄。省略時掃描 `input_xmind/`。
+- `--output`：知識庫輸出根目錄，預設為 `xmind_detail`。
+- `--vendor`：指定 Vendor 輸出目錄名稱；省略時從 XMind 檔名推導。
+- `--force`：忽略既有內容大小保護並強制重新產生。
+- `--log-level`：設定 log level，預設為 `INFO`。
 
 ### Vendor 文件解析
 
@@ -90,7 +120,7 @@ Doc reader 會依文件章節順序抽取 endpoint 的 request / response `<pre>
 
 ### Rovo MCP Confluence Phase 0
 
-目前完成的是**唯讀 capability spike 與 Hard Gate evidence runner**，尚未新增 `python main.py doc --confluence-url ...`。Phase 0 不會呼叫 Confluence write tool、不會修改既有 Vendor output，也不會把 private page body 寫入 repository 或 evidence。
+目前完成的是 **Rovo MCP v2 唯讀 capability spike、單頁 Markdown reader 與 Hard Gate evidence runner**，尚未新增 `python main.py doc --confluence-url ...`。Phase 0 不會呼叫 Confluence write tool、不會修改既有 Vendor output，也不會把 private page body 寫入 repository 或 evidence。
 
 準備方式：
 
@@ -101,12 +131,32 @@ Doc reader 會依文件章節順序抽取 endpoint 的 request / response `<pre>
 Rovo MCP 必要環境變數：
 
 ```text
-ROVO_MCP_URL=https://mcp.atlassian.com/v1/mcp/authv2
-ROVO_MCP_ALLOWED_SITES=company.atlassian.net
+ROVO_MCP_URL=https://mcp.atlassian.com/v2/mcp
+ROVO_MCP_ALLOWED_SITES=ngvgs.atlassian.net
 ROVO_MCP_EMAIL=...              # personal Basic auth
 ROVO_MCP_API_TOKEN=...          # personal Basic auth
 ROVO_MCP_API_KEY=...            # service-account Bearer auth
 ```
+
+Personal token 的 Confluence read scope baseline 是 `read:confluence:agent-interface`。Organization 仍須啟用 API token authentication，並在 Rovo MCP Permissions 允許 Confluence Read。
+
+可將上述設定放在 gitignored 的 `.env.rovo`，執行前載入：
+
+```bash
+set -a
+source .env.rovo
+set +a
+```
+
+直接讀取單一 Confluence page，輸出完整 Markdown 到終端：
+
+```bash
+PYTHONPATH=src python3 scripts/run_rovo_phase0.py \
+  --read-url "https://ngvgs.atlassian.net/wiki/spaces/GA/pages/1471053840/Vendor_Alea" \
+  --auth-mode personal
+```
+
+`--read-url` 仍會驗證 v2 endpoint、required tools、allowed site、唯一 `cloudId`、canonical URL、response page ID、Markdown envelope 與 payload limits，但不需要 fixture/attestation，也不會產生 Hard Gate evidence。
 
 如需驗證 REST API v2 storage-format Plan B，再設定：
 
@@ -122,7 +172,7 @@ CONFLUENCE_REST_BEARER_TOKEN=... # Bearer only
 > 下列多行命令使用 macOS/Linux 的 `\`；Windows PowerShell 請改用反引號 `` ` ``，或參考 [ROVO_PHASE0_RUNBOOK.md](ROVO_PHASE0_RUNBOOK.md) 的 PowerShell 範例。
 
 ```bash
-python scripts/run_rovo_phase0.py \
+PYTHONPATH=src python3 scripts/run_rovo_phase0.py \
   --manifest phase0/fixture_manifest.local.json \
   --admin-attestation phase0/admin_attestation.local.json \
   --failure-observations phase0/failure_observations.local.json \
@@ -136,7 +186,7 @@ Preflight 固定輸出 `status: pending` 並以 exit code `2` 結束，表示尚
 執行完整 live spike：
 
 ```bash
-python scripts/run_rovo_phase0.py \
+PYTHONPATH=src python3 scripts/run_rovo_phase0.py \
   --manifest phase0/fixture_manifest.local.json \
   --auth-mode personal \
   --auth-mode service_account \
@@ -172,11 +222,48 @@ python main.py pdf --pdf Vendor_API_Spec.pdf --vendor Vendor
 
 ### 測試案例生成
 
+新 Vendor 建議使用 `new-vendor` 一次完成來源搜尋、文件解析、測試案例生成、XMind 輸出與回讀驗證。Vendor 名稱是必要的 positional argument：
+
 ```bash
-python main.py generate --vendor Esoterica
-python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate_test_cases_copy.xmind
-python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate_test_cases_copy.xmind --no-merge-key-copy
+# 使用預設目錄處理新 Vendor
+python3 main.py new-vendor Veligames
+
+# 使用完整 pipeline 參數，並強制重新讀取 Vendor 文件
+python3 main.py new-vendor Veligames \
+  --input-root . \
+  --xmind-detail xmind_detail \
+  --vendor-detail new_vendor_detail \
+  --output output \
+  --force \
+  --log-level INFO
 ```
+
+如果 `new_vendor_detail/<Vendor>/` 已經存在，只想重新生成測試案例與 XMind，才使用 `generate --vendor`：
+
+```bash
+python3 main.py generate \
+  --vendor Esoterica \
+  --vendor-detail new_vendor_detail \
+  --xmind-detail xmind_detail \
+  --output output \
+  --log-level INFO
+
+# 合併人工維護的 XMind，並額外輸出不含 merge_key 的交付版本
+python3 main.py generate \
+  --vendor CasinoGate \
+  --human-xmind input_xmind/CasinoGate_test_cases_copy.xmind \
+  --no-merge-key-copy
+```
+
+`new-vendor` 參數說明：
+
+- `vendor`：必要的 Vendor 名稱，例如 `Veligames`；不使用 `--vendor`。
+- `--input-root`：遞迴搜尋 `user_behavior_map.xmind` 與 Vendor 文件的起始目錄，預設為目前目錄。
+- `--xmind-detail`：XMind 知識庫輸出／參考根目錄，預設為 `xmind_detail`。
+- `--vendor-detail`：Vendor 文件解析結果根目錄，預設為 `new_vendor_detail`。
+- `--output`：測試案例與 XMind 輸出根目錄，預設為 `output`。
+- `--force`：強制重新讀取 Vendor 文件。
+- `--log-level`：設定 log level，預設為 `INFO`。
 
 ### New Vendor 一次執行流程
 
@@ -186,8 +273,8 @@ python main.py generate --vendor CasinoGate --human-xmind input_xmind/CasinoGate
 Windows：
 
 ```bash
-python main.py new-vendor Veligames
-python run_new_vendor.py Veligames
+py -3.12 main.py new-vendor Veligames
+py -3.12 run_new_vendor.py Veligames
 ```
 
 macOS / Linux：
@@ -197,14 +284,14 @@ python3 main.py new-vendor Veligames
 python3 run_new_vendor.py Veligames
 ```
 
-`Veligames` 可替換成任何 vendor 名稱，例如 `CasinoGate` 或 `Vibra_Gaming`。
+`Veligames` 可替換成任何 vendor 名稱，例如 `CasinoGate` 或 `Vibra_Gaming`。它是 positional argument，因此正確格式是 `new-vendor Veligames`，不是 `new-vendor --vendor Veligames`。
 
 舊的 `run_new_vendor.py Veligames` 仍保留作為相容入口，內部會轉呼叫 `main.py new-vendor Veligames`。
 
 兩個入口共用 `src/new_vendor_main.py` 的 `build_new_vendor_parser()`：
 
-- `python run_new_vendor.py Veligames`：簡化入口，只接受 vendor 名稱。
-- `python main.py new-vendor Veligames`：完整入口，可使用 `--input-root`、`--output`、`--force` 等 pipeline options。
+- `python3 run_new_vendor.py Veligames`：簡化入口，只接受 vendor 名稱。
+- `python3 main.py new-vendor Veligames`：完整入口，可使用 `--input-root`、`--xmind-detail`、`--vendor-detail`、`--output`、`--force`、`--log-level` 等 pipeline options。
 - `run_new_vendor.py -h` 與 `main.py new-vendor -h` 會依入口顯示各自適用的說明，但 vendor argument 的定義只維護一份。
 
 一次執行：建立 draft JSON → 產生 API parameter validation 與 User Behavior 案例 → 輸出 XMind → 回讀驗證。
@@ -357,8 +444,8 @@ src/
 
 | 檔案 | 功能 |
 |---|---|
-| `scripts/run_rovo_phase0.py` | Phase 0 CLI。執行 manifest/config preflight，或以 personal Basic + service-account Bearer 完成 live read-only spike；輸出 sanitized evidence。 |
-| `doc_reader/confluence_phase0.py` | 驗證 required tools、tool schema、host → cloudId 唯一映射、MCP response envelope、Markdown inventory、continuation/cursor、payload limits、REST storage DOM inventory與 Rovo/REST page version 一致性。 |
+| `scripts/run_rovo_phase0.py` | Rovo MCP v2 Phase 0 CLI。可用 `--read-url` 直接輸出單頁 Markdown，或執行 manifest/config preflight 與 Basic/Bearer Hard Gate，輸出 sanitized evidence。 |
+| `doc_reader/confluence_phase0.py` | 驗證 v2 endpoint、`getConfluenceContent` typed arguments、host → cloudId 唯一映射、response page ID、Markdown envelope、continuation/cursor、payload limits、REST storage DOM inventory與 Rovo/REST page version 一致性。 |
 | `phase0/*.example.json` | 九類 fixture manifest、admin checklist 與 failure matrix 範本。實際 `.local.json` 不提交。 |
 | `tests/test_confluence_phase0.py` | Synthetic contract tests，涵蓋 schema mismatch、empty/malformed response、ambiguous Markdown、cursor loop、截斷上限、REST complex structure、event-loop guard 與 evidence secret redaction。 |
 ### PDF Reader 流程 (`python main.py pdf`)
@@ -392,10 +479,11 @@ src/
 | `generator/draft_builder.py` | Draft JSON 鷹架。讀取 capability_profile / endpoints / error_codes / checklist，組合 draft 檔。包含 endpoint 角色推斷、前置條件模板、generation_mapping（category → XMind section 對應表）。 |
 | `generator/draft_schema.py` | Draft schema 常數。定義 `SCHEMA_VERSION`、XMind 欄位標籤、API parameter test 合約、allowed output sections、category → section mapping、required/optional 欄位、negative keywords。 |
 | `generator/draft_validator.py` | Draft JSON 驗證器。檢查 required fields、output_section 合法性、category → section routing、scenario 格式、preconditions/remarks 標籤、steps 完整性、expected_error、id 唯一性。 |
-| `generator/case_generation_context.py` | 生成上下文。從 draft 取出 generation context（capability_profile、endpoint_roles、endpoint_analysis、error_codes、game_codes），選擇 parameter error code，產生預設測試帳號。 |
+| `generator/case_generation_context.py` | 生成上下文。從 draft 取出 generation context（capability_profile、endpoint_roles、endpoint_analysis、error_codes、game_codes），保留文件化 parameter-error candidates，並產生預設測試帳號。 |
+| `generator/multi_error_policy.py` | 多錯誤碼選擇策略。依 Vendor、mutation kind、parameter 與 endpoint context 選擇文件化錯誤碼；未註冊的多錯誤情境 fail closed。 |
 | `generator/endpoint_analyzer.py` | Endpoint topology / parameter semantics 分析器。從 endpoint role 和 request parameters 判斷 betAndSettle combined endpoint、multiple bets endpoint 形態、settlement 是否有 round-end control parameter / jackpot control parameter。 |
 | `generator/reference_selector.py` | 參考知識選擇。依 capability_profile + endpoint_analysis 選擇 mandatory、conditional mandatory、capability-specific categories，並找出對應的 xmind_detail chunk 檔案作為參考。 |
-| `generator/test_case_generator.py` | 測試案例生成器。遍歷每個 endpoint 的 request parameters，產生 required/optional/array 參數測項；API parameter remarks 和 expected response 使用 doc pre，沒有 pre 就輸出 `{}`，不自產 response sample；若 error response pre 看起來是 parameter validation shape，會沿用該 shape 並替換 code 欄位；同時從 User_Behavior_map 參考案例產生 Launch Game、Bet and Settle、Cancel Bet、Balance、Game type 等 User Behavior 測項。 |
+| `generator/test_case_generator.py` | 測試案例生成器。遍歷 request parameters，產生 required/optional/nullable/array/object 測項；支援 vendor multi-error policy、numeric/decimal boundary、ISO time format 與 currency 規則。API parameter remarks/response 使用 doc pre，缺少時輸出 `{}`；同時從 User_Behavior_map 產生各類 User Behavior 測項。 |
 | `generator/human_xmind_merger.py` | Human-edited XMind merge。以 `merge_key:<stable_case_id>` 對齊新舊 case，保留 human scenario / steps / markers，追蹤人工新增與刪除，並刷新舊的 API payload remarks，避免 launch-game payload 或舊 error sample 污染新版案例。 |
 | `generator/test_case_summary.py` | 產生 `<Vendor>_test_cases_summary.md`，統計 User Behavior / API parameter test 數量、抽到的 User_Behavior_map 分支與 endpoint topology 摘要。 |
 | `xmind_writer/metersphere_profile_extractor.py` | MeterSphere profile 提取。從 golden XMind 參考檔抽出 case 欄位風格、topic 深度、writer guidance，供 writer 遵循。 |
@@ -410,8 +498,12 @@ src/
 - Case 排序以 endpoint 為群組；endpoint 內的 request parameters 依 request pre 欄位順序排列，path parameter 仍會先產生。
 - `amount Input negative number` 會優先關聯文件中包含 `Insufficient funds` / `Insufficient balance` 的 error code。
 - rollback/refund 類 endpoint 若有 `amount`，會加上 `amount Input lower than bet_amount`。
-- request 內若有 `currency`，會加上 `currency Input invalid currency`，並優先關聯 `Currency mismatch`。
-- data type 測項會依 doc parameter type 命名，例如 string 參數產生 `input int`，int/bool 參數產生 `input string`；array/object 仍保留特殊測項。
+- request 內若有 `currency`，會加上 `Input invalid currency`，並優先關聯 `Currency mismatch`。
+- 文件 description 標示 `nullable`／`can be null`／`may be null`，或 request example 使用 JSON `null` 時，blank 類測項會改為 `<parameter> input null` 並送出 JSON `null`。
+- data type 測項會依 doc parameter type 命名，例如 numeric/bool 參數產生 `input string`，string 參數產生 `input int`；array/object 仍保留特殊測項。
+- 數值參數涵蓋 `0`、負數與 decimal precision boundary；numeric string 會保留 JSON string 格式。
+- request example 為 ISO-8601 datetime string 時，會增加 `input wrong format` 測項。
+- 同一 Vendor 有多個 parameter-validation error 時，registered vendor policy 會依 missing/blank/wrong-type/invalid-format 等 mutation kind 選擇文件化錯誤碼；無匹配 policy 時 fail closed，不臆測錯誤碼。
 - timestamp/time 類 sample value 會用目前 Unix timestamp 產生，避免固定舊時間。
 
 
@@ -420,13 +512,13 @@ src/
 完整測試：
 
 ```bash
-python -m unittest discover -s tests
+python3 -m unittest discover -s tests
 ```
 
 只執行 Phase 0 contract tests：
 
 ```bash
-python -m unittest tests.test_confluence_phase0 -v
+python3 -m unittest tests.test_confluence_phase0 -v
 ```
 
 Live Rovo/REST integration 不會在一般 test discovery 中執行；必須透過 `scripts/run_rovo_phase0.py` 明確 opt in。
@@ -465,7 +557,7 @@ Live Rovo/REST integration 不會在一般 test discovery 中執行；必須透�
 - PDF Reader 不做 OCR；掃描版或圖片型 PDF 只輸出 validation report。
 - URL 靜態抓取不一定能處理 JavaScript render 的文件（Stoplight、Swagger UI、Redoc）。
 - User Behavior 目前是參考案例改寫，不是完整 business-flow payload composer。
-- Rovo MCP 目前只完成 Phase 0 runner，尚未接入 `main.py doc`、extractor 或 exporter；不得把 `status: pending` 視為 Hard Gate 通過。
+- Rovo MCP 目前提供 Phase 0 runner 與獨立 `--read-url` Markdown 輸出，尚未接入 `main.py doc`、MarkdownDocumentParser、extractor 或 exporter；不得把單頁讀取成功或 `status: pending` 視為 Hard Gate 通過。
 - Live Phase 0 需要 organization admin 設定、兩種測試 identity、受控 fixture pages 與 failure observations；repository 內只有 synthetic fixtures，不含 private Confluence body。
 
 
