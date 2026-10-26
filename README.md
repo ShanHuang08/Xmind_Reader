@@ -1,10 +1,13 @@
 # XMind Reader
 
+新增獨立的結構化 Markdown 流程：`python main.py read --input Vendor_API.pdf --vendor Vendor`。
+經 MarkItDown 轉換、正規化與共用 reader 產生 `vendor_markdown/`；既有 DOC、test case 與 XMind 流程維持原行為。安裝、分階段操作及人工審核請見 [Markdown Reader 使用說明](MARKDOWN_READER_USAGE.md)。
+
 ## 專案目的
 
 本專案是 Vendor API 測試知識管理工具，解決一個核心問題：**如何把分散在 XMind 測試地圖、Confluence 文件、PDF、網頁 URL 中的 Vendor API 測試知識，整理成 AI（Codex）能高效讀取和使用的格式。**
 
-專案包含五個資料整理流程：
+專案包含四個資料整理流程：
 
 1. **XMind 知識庫讀取** (`input_xmind/` → `xmind_detail/`)
    解析已整理好的 XMind 測試案例，抽出結構化欄位（ID、前置條件、步驟、預期結果），按模組和標籤切分為 JSON chunk，供 AI 按需讀取。
@@ -12,13 +15,10 @@
 2. **Vendor 文件解析** (`new_vendor_source/` → `new_vendor_detail/`)
    讀取新 Vendor 的 Confluence 匯出文件，抽取 API endpoints、error codes、capability profile 等結構化知識。
 
-3. **URL 補充讀取** (URL → `new_vendor_detail/<Vendor>/vendor_url/`)
-   抓取 Vendor API 文件網頁，支援靜態 URL + Playwright browser fallback + OpenAPI JSON 自動偵測。
+3. **PDF／HTML／URL 文件讀取** (來源 → `new_vendor_detail/<Vendor>/vendor_markdown/`)
+   使用 `main.py read` 統一取得、轉成 Markdown、正規化並產生結構化文件與 JSON 索引。
 
-4. **PDF 補充讀取** (PDF → `new_vendor_detail/<Vendor>/vendor_pdf/`)
-   解析 Vendor 額外提供的 PDF API 文件，產生 endpoint index 和 section chunks。
-
-5. **測試案例生成** (`new_vendor_detail/` → `output/`)
+4. **測試案例生成** (`new_vendor_detail/` → `output/`)
    從 Vendor 中間格式建立 draft JSON、自動產生 API parameter validation 與部分 User Behavior 測試案例、輸出 MeterSphere 相容的 XMind 檔，並回讀驗證。
 
 另有一個與 production pipeline 隔離的 **Rovo MCP Confluence Phase 0 capability spike**，用來驗證 private Confluence page 的唯讀存取、Markdown fidelity、截斷／分頁行為與 REST storage-format 備援可行性。Phase 0 通過前，不會接入 `main.py doc`。
@@ -159,15 +159,15 @@ Evidence 只保存 hash、數量、tool schema、錯誤分類與 gate decision�
 ### URL 補充讀取
 
 ```bash
-python main.py url --url https://vendor.example.com/api-docs --vendor NewVendor
-python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
-python main.py url --html exported_vendor_doc.html --url https://vendor.example.com/api-docs --vendor NewVendor
+python main.py read --url https://vendor.example.com/api-docs --vendor NewVendor
+python main.py read --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
+python main.py read --input exported_vendor_doc.html --source-url https://vendor.example.com/api-docs --vendor NewVendor
 ```
 
 ### PDF 補充讀取
 
 ```bash
-python main.py pdf --pdf Vendor_API_Spec.pdf --vendor Vendor
+python main.py read --input Vendor_API_Spec.pdf --vendor Vendor
 ```
 
 ### 測試案例生成
@@ -309,8 +309,7 @@ src/
   main.py                             CLI 統一入口
   xmind_reader_main.py                XMind 流程控制
   doc_reader_main.py                  Doc 流程控制
-  pdf_reader_main.py                  PDF 流程控制
-  url_reader_main.py                  URL 流程控制
+  MarkItDown_reader_main.py             統一 read CLI
   generator_main.py                   Generate 流程控制
   parser/                             XMind 解析
   extractor/                          知識抽取
@@ -361,28 +360,16 @@ src/
 | `doc_reader/confluence_phase0.py` | 驗證 required tools、tool schema、host → cloudId 唯一映射、MCP response envelope、Markdown inventory、continuation/cursor、payload limits、REST storage DOM inventory與 Rovo/REST page version 一致性。 |
 | `phase0/*.example.json` | 九類 fixture manifest、admin checklist 與 failure matrix 範本。實際 `.local.json` 不提交。 |
 | `tests/test_confluence_phase0.py` | Synthetic contract tests，涵蓋 schema mismatch、empty/malformed response、ambiguous Markdown、cursor loop、截斷上限、REST complex structure、event-loop guard 與 evidence secret redaction。 |
-### PDF Reader 流程 (`python main.py pdf`)
+### 統一文件讀取流程 (`python main.py read`)
 
-| 檔案 | 功能 |
+PDF／HTML 經 MarkItDown 轉換，再正規化成 full_text.md，由共用 reader 輸出 JSON。所有結果都直接放在 `new_vendor_detail/<Vendor>/vendor_markdown/`，不再建立來源或版本子資料夾。`pdf`／`url` 舊 CLI 已移除；詳細流程見 [使用說明](MARKDOWN_READER_USAGE.md)。
+
+| 模組 | 功能 |
 |---|---|
-| `pdf_reader_main.py` | 流程主控制器。執行 validation → Markdown 轉換 → endpoint index → section chunking。 |
-| `pdf_reader/pdf_validator.py` | PDF 可讀性驗證。檢查是否有可抽取文字；掃描版只輸出報告，不做 OCR。 |
-| `pdf_reader/pdf_markdown_reader.py` | 用 `pymupdf4llm` 轉 Markdown，僅供除錯或 fallback。 |
-| `pdf_reader/pdf_endpoint_indexer.py` | Endpoint index 建立器。偵測 GET/POST、`/api/xxx`、action-style 等格式，含 wallet endpoint role 對應。 |
-| `pdf_reader/pdf_section_chunker.py` | 依 endpoint 切分 section，不產生 page-level JSON。 |
-| `pdf_reader/pdf_exporter.py` | 輸出 manifest、validation_report、endpoint_index、sections/、full_text.md。 |
+| `MarkItDown_reader_main.py` | 統一 read CLI 與階段參數驗證。 |
+| `MarkItDown_reader/` | 轉換、正規化、canonical Markdown reader、flat manifest 與 JSON 輸出。 |
 
-### URL Reader 流程 (`python main.py url`)
-
-| 檔案 | 功能 |
-|---|---|
-| `url_reader_main.py` | 流程主控制器。抓取 URL 或讀取本地 HTML，自動偵測 OpenAPI JSON 或 HTML，合併 endpoint index + action index，切分 section chunks。 |
-| `url_reader/url_fetcher.py` | URL 抓取。全平台優先用 `urllib`，Windows 補用 PowerShell fallback。靜態失敗時自動嘗試 Playwright Chromium。提供 `is_openapi_like()` 偵測 OpenAPI schema。 |
-| `url_reader/html_markdown_reader.py` | HTML → Markdown。優先用 BeautifulSoup + markdownify，否則用內建 parser。自動清除 script/style/nav/footer。 |
-| `url_reader/openapi_reader.py` | OpenAPI JSON → Markdown。將 `paths` 轉為 endpoint / method / parameters / responses 表格。 |
-| `url_reader/action_indexer.py` | Wallet action index。偵測 `action: bet`、`action: win` 等格式，自動分類 role（balance / bet / settlement / rollback），補充 PDF endpoint indexer 漏抓的 wallet action。 |
-| `url_reader/url_section_chunker.py` | 依 endpoint index 切分 section chunks。 |
-| `url_reader/url_exporter.py` | 輸出 manifest、validation_report、endpoint_index、sections/、full_text.md。結構與 PDF reader 對齊。 |
+遠端抓取仍共用底層 `url_reader/url_fetcher.py`；明確指定 legacy PDF converter 時沿用 `pdf_reader/pdf_markdown_reader.py`。這些底層模組不提供舊 CLI。
 
 ### Generate 流程 (`python main.py generate`)
 

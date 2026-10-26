@@ -1,4 +1,4 @@
-"""Unified CLI entry point for XMind, document, PDF, URL, and test case generation."""
+"""Unified CLI entry point for XMind, vendor documents, and test case generation."""
 
 from __future__ import annotations
 
@@ -38,12 +38,20 @@ Examples:
   Parse a vendor document and force the vendor folder name:
     python main.py doc --input Vendor_Esoterica.doc --vendor Esoterica
 
-  Parse a supplementary vendor API PDF:
-    python main.py pdf --pdf EGT_Digital_Integration_API_Spec_v1.28.pdf --vendor EGT_Digital
-    python main.py pdf --pdf /Users/shan/Documents/Vendor_API.pdf --vendor NewVendor
+  Convert and normalize a PDF, then read canonical Markdown (new isolated flow):
+    python main.py read --input Vendor_API.pdf --vendor NewVendor
 
-  Parse a supplementary vendor API URL:
-    python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username gpkdoc --password gpkdoc
+  Read local HTML or a remote API document through the same flow:
+    python main.py read --input exported.html --source-url https://vendor.example/docs --vendor NewVendor
+    python main.py read --url https://vendor.example/docs --vendor NewVendor --timeout 30
+
+  Run one stage at a time (use the artifact paths returned by each command):
+    python main.py read --input Vendor_API.pdf --vendor NewVendor --stage convert
+    python main.py read --input saved/converted.md --vendor NewVendor --stage normalize
+    python main.py read --input saved/full_text.md --stage read
+
+  Export converted Markdown for human/AI review:
+    python main.py read --input saved/converted.md --vendor NewVendor --stage normalize --export-review
 
   Generate draft JSON, structured test cases, and final XMind:
     python main.py generate --vendor Esoterica
@@ -54,16 +62,20 @@ Examples:
 Output folders:
   xmind reader -> xmind_detail/<Vendor>/
   doc reader   -> new_vendor_detail/<Vendor>/
-  pdf reader   -> new_vendor_detail/<Vendor>/vendor_pdf/
-  url reader   -> new_vendor_detail/<Vendor>/vendor_url/
+  read         -> new_vendor_detail/<Vendor>/vendor_markdown/ (versioned artifacts)
   generate     -> output/<Vendor>/draft_test_cases.json and output/<Vendor>/<Vendor>_test_cases.xmind
+
+The new read flow does not feed generate/new-vendor automatically.
+Exit code 3 from read means partial output or review is needed.
+See MARKDOWN_READER_USAGE.md for installation, artifact paths, and review import.
 """,
     )
-    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,pdf,url,generate,new-vendor}")
+    subparsers = parser.add_subparsers(dest="reader", metavar="{xmind,doc,read,generate,new-vendor}")
+    from MarkItDown_reader_main import build_parser as build_document_parser
+
+    build_document_parser(subparsers.add_parser("read", help="Isolated PDF/HTML → canonical Markdown pipeline"))
     _add_xmind_parser(subparsers)
     _add_doc_parser(subparsers)
-    _add_pdf_parser(subparsers)
-    _add_url_parser(subparsers)
     _add_generate_parser(subparsers)
     _add_new_vendor_parser(subparsers)
     parsed = parser.parse_args(args)
@@ -71,6 +83,11 @@ Output folders:
     if parsed.reader is None:
         parser.print_help()
         return 0
+
+    if parsed.reader == "read":
+        from MarkItDown_reader_main import run as run_markitdown_reader
+
+        return run_markitdown_reader(parsed, parser)
 
     if parsed.reader == "xmind":
         from xmind_reader_main import main as xmind_main
@@ -93,21 +110,6 @@ Output folders:
         from doc_reader_main import main as doc_main
 
         return doc_main(_forward_args(parsed))
-
-    if parsed.reader == "pdf":
-        from pdf_reader_main import main as pdf_main
-
-        return pdf_main(_forward_args(parsed, names=("pdf", "vendor", "output", "log_level")))
-
-    if parsed.reader == "url":
-        from url_reader_main import main as url_main
-
-        return url_main(
-            _forward_args(
-                parsed,
-                names=("url", "html", "vendor", "username", "password", "output", "timeout", "log_level"),
-            )
-        )
 
     from generator_main import main as generator_main
 
@@ -200,78 +202,6 @@ Examples:
     )
     doc.add_argument("--force", action="store_true", help="Force regeneration even if source file is unchanged.")
     doc.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
-
-
-def _add_pdf_parser(subparsers: argparse._SubParsersAction) -> None:
-    pdf = subparsers.add_parser(
-        "pdf",
-        help="Parse supplementary vendor API PDFs into new_vendor_detail/<Vendor>/vendor_pdf/",
-        description=(
-            "Parse a supplementary vendor API PDF into validation, Markdown, endpoint index, "
-            "and API section chunks. DOC/HTML output remains the primary source."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py pdf --pdf VendorName_Integration_API_Spec_v1.28.pdf --vendor VendorName
-  python main.py pdf --pdf /Users/shan/Documents/Vendor_API.pdf --vendor NewVendor --output new_vendor_detail
-  python main.py pdf --pdf C:\\Docs\\Vendor_API.pdf --vendor NewVendor --output new_vendor_detail
-  python main.py pdf --pdf Vendor_API.pdf --vendor NewVendor --output new_vendor_detail/NewVendor/vendor_pdf
-""",
-    )
-    pdf.add_argument("--pdf", required=True, help="PDF file path.")
-    pdf.add_argument(
-        "--vendor",
-        default="",
-        help="Vendor folder name. If omitted, inferred from PDF file name.",
-    )
-    pdf.add_argument(
-        "--output",
-        default="new_vendor_detail",
-        help=(
-            "Output root folder or direct vendor_pdf folder. Default: new_vendor_detail. "
-            "If the path ends with vendor_pdf, it is used directly."
-        ),
-    )
-    pdf.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
-
-
-def _add_url_parser(subparsers: argparse._SubParsersAction) -> None:
-    url = subparsers.add_parser(
-        "url",
-        help="Parse supplementary vendor API URLs into new_vendor_detail/<Vendor>/vendor_url/",
-        description=(
-            "Parse a supplementary vendor API URL into validation, Markdown, endpoint index, "
-            "and API section chunks. DOC/HTML output remains the primary source."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py url --url http://docs.gpk.asia/seamless-wallet --vendor GPK --username account --password password
-  python main.py url --url https://vendor.example.com/openapi.json --vendor NewVendor
-  python main.py url --html exported_vendor_doc.html --url https://vendor.example.com/api-docs --vendor NewVendor
-  python main.py url --url https://vendor.example.com/api-docs --vendor NewVendor --output new_vendor_detail
-""",
-    )
-    url.add_argument("--url", default="", help="Vendor API document URL.")
-    url.add_argument("--html", default="", help="Local HTML file exported from a vendor API document page.")
-    url.add_argument(
-        "--vendor",
-        default="",
-        help="Vendor folder name. If omitted, inferred from URL host.",
-    )
-    url.add_argument("--username", default="", help="Optional HTTP Basic Auth username.")
-    url.add_argument("--password", default="", help="Optional HTTP Basic Auth password.")
-    url.add_argument(
-        "--output",
-        default="new_vendor_detail",
-        help=(
-            "Output root folder or direct vendor_url folder. Default: new_vendor_detail. "
-            "If the path ends with vendor_url, it is used directly."
-        ),
-    )
-    url.add_argument("--timeout", type=int, default=30, help="HTTP timeout seconds. Default: 30")
-    url.add_argument("--log-level", default="INFO", help="Logging level. Default: INFO")
 
 
 def _add_generate_parser(subparsers: argparse._SubParsersAction) -> None:

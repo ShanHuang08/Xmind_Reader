@@ -15,6 +15,7 @@ regression-results/
 tools/
 phase0-evidence/
 phase0/*.local.json
+old_md/
 
 # Binary input files (too large for GitHub)
 input_xmind/*.xmind

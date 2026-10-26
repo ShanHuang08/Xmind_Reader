@@ -1,0 +1,2 @@
+# Optional, isolated document reader; existing requirements.txt is unchanged.
+markitdown[pdf]==0.1.9
