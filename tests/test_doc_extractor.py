@@ -3,12 +3,37 @@ from __future__ import annotations
 import unittest
 
 from doc_reader.doc_extractor import (
+    _extract_error_codes,
     _extract_vendor_master_checklist,
     extract_vendor_detail,
 )
 
 
 class DocExtractorTests(unittest.TestCase):
+    def test_error_section_headers_are_not_extracted_as_error_codes(self) -> None:
+        parsed = {
+            "paragraphs": [
+                {"style": "h1", "text": "Error codes"},
+                {"style": "p", "text": "error code"},
+                {"style": "p", "text": "message"},
+                {"style": "p", "text": "Description"},
+                {"style": "p", "text": "301"},
+                {"style": "p", "text": "Insufficient balance."},
+                {"style": "p", "text": "500"},
+                {"style": "p", "text": "Internal Error"},
+            ],
+            "tables": [],
+            "plain_text": "",
+        }
+
+        self.assertEqual(
+            _extract_error_codes(parsed, ""),
+            [
+                {"code": "301", "context": "Insufficient balance."},
+                {"code": "500", "context": "Internal Error"},
+            ],
+        )
+
     def test_checklist_preserves_selected_confluence_task_values(self) -> None:
         parsed = {
             "tables": [

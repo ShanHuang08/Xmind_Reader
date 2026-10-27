@@ -93,7 +93,7 @@ def rules(source: str, meta: dict, blocks: list[dict]) -> dict:
     # flattened. Evidence remains an exact quote from the converted Markdown.
     for sec_start, sec_end, number, title in spans:
         section = "\n".join(lines[sec_start:sec_end])
-        path_match = re.search(r"(?:\{[A-Za-z_]\w*\})\s*(/[^\s|}`]+)|\b(?:URL|Endpoint)\s*[:|]?\s*(https?://[^\s|`]+|/[^\s|`]+)", section, re.I)
+        path_match = re.search(r"(?:\{[A-Za-z_]\w*\})\s*(/[^\s|`]+)|\b(?:URL|Endpoint)\s*[:|]?\s*(https?://[^\s|`]+|/[^\s|`]+)", section, re.I)
         path = ((path_match.group(1) or path_match.group(2)) if path_match else None)
         method_match = re.search(r"\b(?:HTTP\s+)?Method\b[\s\S]{0,100}?\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\b|\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s*:", section, re.I)
         method = next((group.upper() for group in method_match.groups() if group), None) if method_match else None
@@ -188,6 +188,8 @@ def rules(source: str, meta: dict, blocks: list[dict]) -> dict:
         else:
             doc["operations"].append(op)
 
+    _extract_callback_heading_operations(doc, source, lines, blocks)
+    _extract_documented_url_operations(doc, source, lines, blocks)
     _extract_numeric_error_codes(doc, source)
 
     # Avoid silently declaring a document complete when extraction found only
@@ -200,6 +202,370 @@ def rules(source: str, meta: dict, blocks: list[dict]) -> dict:
     # All source remains visible. Human review can resolve coverage without changing code.
     doc["status"] = document_status(doc)
     return doc
+
+
+_HTTP_URL_RE = re.compile(r"https?://[^\s|`]+", re.I)
+_DO_PATH_RE = re.compile(r"(?<![\w./-])(?:[A-Za-z][A-Za-z0-9_-]*\.do)(?![\w.-])", re.I)
+
+
+def _extract_documented_url_operations(doc: dict, source: str, lines: list[str], blocks: list[dict]) -> None:
+    """Recover endpoints documented as request examples or prose.
+
+    PDF converters often leave a URL on its own line, without the HTTP method
+    and without a Markdown link.  Keep this generic: only `.do` endpoints
+    which occur in an API/request/example context are promoted, while the
+    normal scope classifier decides whether a game-wallet operation is useful.
+    """
+    candidates: dict[str, dict] = {}
+    for index, line in enumerate(lines):
+        urls = _HTTP_URL_RE.findall(line)
+        paths = _DO_PATH_RE.findall(line)
+        if not urls and not paths:
+            continue
+        context = " ".join(lines[max(0, index - 2):min(len(lines), index + 3)])
+        if not urls and not re.search(r"\b(?:request|response|example|api|authenticate|bet|refund|result)\b", context, re.I):
+            continue
+        for value in urls:
+            match = re.search(r"/([A-Za-z][A-Za-z0-9_-]*\.do)", value, re.I)
+            if not match:
+                continue
+            path = "/" + match.group(1)
+            key = path.lstrip("/").casefold()
+            candidate = candidates.setdefault(key, {"path": path, "lines": [], "url_lines": []})
+            candidate["lines"].append(index)
+            candidate["url_lines"].append(index)
+        for value in paths:
+            # In prose (e.g. ``refundBet.do API requests``) there is no
+            # leading slash to cite. Preserve the documented spelling so the
+            # evidence contract remains exact; URL examples are handled above
+            # and retain their `/endpoint.do` path.
+            path = value if "/" not in line[:line.casefold().find(value.casefold())] else "/" + value
+            key = path.lstrip("/").casefold()
+            candidates.setdefault(key, {"path": path, "lines": [], "url_lines": []})["lines"].append(index)
+
+    existing = {str(op.get("url_or_path", "")).split("?")[0].lstrip("/").casefold() for op in doc["operations"]}
+    for candidate in candidates.values():
+        path = candidate["path"]
+        if path.lstrip("/").casefold() in existing:
+            continue
+        # Mentions in explanatory prose are useful for classification, but
+        # parameter tables/examples belong to the endpoint's document section.
+        occurrence_lines = sorted(set(candidate["url_lines"] or candidate["lines"]))
+        name = _documented_endpoint_name(path, lines, occurrence_lines)
+        context_start, context_end, relevant_occurrences = _endpoint_context_bounds(
+            lines, path, occurrence_lines
+        )
+        block = next((item for item in blocks if item["line_start"] <= context_start + 1 <= item["line_end"]), blocks[0])
+        ref = evidence(source, occurrence_lines[0] + 1, occurrence_lines[0] + 1)
+        method, method_line = _documented_http_method(lines, occurrence_lines)
+        op = operation(name, method, path, None, ref, block["block_id"])
+        op["evidence"]["operation_name"] = [ref]
+        op["evidence"]["url_or_path"] = [ref]
+        if method_line is not None:
+            op["evidence"]["http_method"] = [evidence(source, method_line + 1, method_line + 1)]
+        # Combine the local request examples and parameter pages for this
+        # endpoint. This preserves enough context for balance/result semantics
+        # and lets the existing parameter parser build request/response rows.
+        context_lines = list(range(context_start, context_end))
+        context = "\n".join(lines[i] for i in context_lines)
+        op["logic"] = context
+        op["source_description"] = _section_description(context, name)
+        for kind, area_start, area_end in _parameter_areas(context):
+            offset = context[:area_start].count("\n")
+            op["parameters"].extend(_parse_parameter_rows(
+                context[area_start:area_end], kind, source, context_lines[offset]
+            ))
+        _append_documented_examples(op, source, lines, relevant_occurrences,
+                                     context_start, context_end)
+        op["source_section"] = {"number": "", "title": name,
+                                 "line_start": context_start + 1,
+                                 "line_end": context_end}
+        op["review_status"] = "pending"
+        doc["operations"].append(op)
+        existing.add(path.lstrip("/").casefold())
+
+    # A URL may already have been extracted by the older method/path rule. If
+    # its method was missing, apply the same explicit protocol evidence to it.
+    for op in doc["operations"]:
+        if op.get("http_method") or not op.get("url_or_path"):
+            continue
+        basename_match = re.search(r"([A-Za-z][A-Za-z0-9_-]*\.do)", str(op["url_or_path"]), re.I)
+        if not basename_match:
+            continue
+        basename = basename_match.group(1).casefold()
+        occurrences = [index for index, line in enumerate(lines) if basename in line.casefold()]
+        method, method_line = _documented_http_method(lines, occurrences)
+        if method is None or method_line is None:
+            continue
+        op["http_method"] = method
+        op.setdefault("evidence", {})["http_method"] = [evidence(source, method_line + 1, method_line + 1)]
+
+
+def _endpoint_context_bounds(lines: list[str], path: str, occurrence_lines: list[int]) -> tuple[int, int, list[int]]:
+    """Select one endpoint section instead of merging nearby API pages."""
+    basename = str(path).rsplit("/", 1)[-1].split("?", 1)[0].casefold().removesuffix(".do")
+    semantic = {
+        "authenticate": r"token\s+authentication|authentication\s+request",
+        "betresult": r"bet\s*/\s*result|bet\s+and\s+win",
+        "refundbet": r"\brefund\b",
+    }.get(basename)
+    # The last request URL for an endpoint is normally inside its detailed
+    # API section. Start from that occurrence so preceding shared protocol
+    # examples do not contaminate the parameter table.
+    anchor = max(occurrence_lines)
+    # Bound the section at the next numbered API heading or obvious endpoint
+    # section heading. This keeps Bet/Result data away from Refund data.
+    start = anchor
+    for index in range(anchor, -1, -1):
+        heading = lines[index].lstrip("\f")
+        if re.match(r"^\s*(?:\d+(?:\.\d+)+\.?\s+|Game Provider Response:)", heading, re.I):
+            start = index
+            break
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        heading = lines[index].lstrip("\f")
+        if re.match(r"^\s*(?:\d+(?:\.\d+)+\.?\s+|V\.\s+|VI\.\s+)", heading, re.I):
+            if index > anchor:
+                end = index
+                break
+    relevant = [index for index in occurrence_lines if start <= index < end]
+    if not relevant:
+        relevant = [max(start, min(anchor, end - 1))]
+    return start, end, relevant
+
+def _documented_http_method(lines: list[str], occurrence_lines: list[int]) -> tuple[str | None, int | None]:
+    """Infer method only from explicit document wording.
+
+    MegaFair documents callbacks as supporting ``GET/POST method``.  For the
+    wallet integration, POST is the safer documented choice when both are
+    listed; a standalone GET remains GET. Never invent a method otherwise.
+    """
+    nearby_indexes = {
+        index for occurrence in occurrence_lines
+        for index in range(max(0, occurrence - 15), min(len(lines), occurrence + 16))
+    }
+    generic = re.compile(r"\bGET\s*/\s*POST\b|\bPOST\s*/\s*GET\b|\bGET\s+or\s+POST\b", re.I)
+    explicit = re.compile(r"\b(?:HTTP\s+Request\s+method\s*:\s*|HTTP\s+method\s*:\s*|)\s*(GET|POST)\b", re.I)
+    for index in sorted(nearby_indexes):
+        line = lines[index]
+        if generic.search(line):
+            return "POST", index
+        match = explicit.search(line)
+        if match:
+            return match.group(1).upper(), index
+    # A manual may state the callback protocol once in a shared section and
+    # omit the method again beside each individual callback URL.
+    for index, line in enumerate(lines):
+        if generic.search(line):
+            return "POST", index
+    return None, None
+
+
+def _documented_endpoint_name(path: str, lines: list[str], occurrence_lines: list[int]) -> str:
+    basename = path.rsplit("/", 1)[-1].removesuffix(".do")
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", basename).replace("_", " ").replace("-", " ")
+    if basename.casefold() == "betresult":
+        return "Bet/Result"
+    if basename.casefold() == "refundbet":
+        return "Refund"
+    if basename.casefold() == "authenticate":
+        return "Authenticate"
+    return normalized.title()
+
+
+_VERTICAL_FIELD_NAMES = {
+    "token", "userid", "username", "firstname", "lastname", "email", "currency", "balance",
+    "gamesessionid", "gamesessionid", "hash", "bet", "win", "roundid", "gameid", "kind",
+    "isroundfinished", "extsystemtransactionid", "casinotransactionid",
+}
+
+
+def _vertical_field_name(value: str) -> bool:
+    value = value.strip()
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", value):
+        return False
+    lowered = value.casefold()
+    if lowered in {"name", "type", "description", "request", "response", "parameters", "values", "optional"}:
+        return False
+    return bool(re.search(r"[A-Z]", value[1:])) or lowered in _VERTICAL_FIELD_NAMES
+
+
+def _parse_vertical_parameter_rows(text: str, direction: str, source: str,
+                                   absolute_line_offset: int) -> list[dict]:
+    """Parse PDF tables where names, types, and descriptions occupy columns.
+
+    MarkItDown may emit a table as one value per line, for example ``userId``
+    followed later by ``String`` and its description. The regular row parser
+    cannot see that column relationship, so use type markers to associate the
+    nearest documented field name.
+    """
+    lines = text.splitlines()
+    type_re = re.compile(r"^(string|number|integer|int|long|float|double|boolean|bool|decimal|object|array|date|datetime)(?:\s+(.*))?$", re.I)
+    typed = [(index, line.strip(), type_re.match(line.strip())) for index, line in enumerate(lines)]
+    typed = [(index, value, match) for index, value, match in typed if match]
+    result = []
+    used: set[str] = set()
+    inline_re = re.compile(
+        r"^([A-Za-z][A-Za-z0-9_]*)\s+(string|number|integer|int|long|float|double|boolean|bool|decimal|object|array|date|datetime)(?:\s+(.*))?$",
+        re.I,
+    )
+    for line_number, line in enumerate(lines):
+        inline = inline_re.match(line.strip())
+        if not inline or not _vertical_field_name(inline.group(1)):
+            continue
+        field, type_name, description = inline.groups()
+        used.add(field.casefold())
+        source_line = absolute_line_offset + line_number + 1
+        record = {"name": field, "type": type_name.lower(), "description": description or "",
+                  "direction": direction, "required": None, "required_basis": "not specified in source"}
+        result.append({"name": field, "direction": direction, "raw": json_text(record),
+                       "evidence": evidence(source, source_line, source_line)})
+    first_type_line = typed[0][0] if typed else len(lines)
+    preamble_fields = [
+        (index, line.strip()) for index, line in enumerate(lines[:first_type_line])
+        if _vertical_field_name(line.strip()) and line.strip().casefold() not in used
+    ]
+    preamble_position = 0
+    for position, (type_line, type_value, match) in enumerate(typed):
+        field_line = None
+        field = None
+        while preamble_position < len(preamble_fields):
+            candidate_line, candidate = preamble_fields[preamble_position]
+            preamble_position += 1
+            if candidate.casefold() not in used:
+                field_line, field = candidate_line, candidate
+                break
+        for candidate_line in range(type_line - 1, max(-1, type_line - 10), -1):
+            if field is not None:
+                break
+            candidate = lines[candidate_line].strip()
+            if _vertical_field_name(candidate) and candidate.casefold() not in used:
+                field_line, field = candidate_line, candidate
+                break
+        if field is None:
+            continue
+        used.add(field.casefold())
+        next_type = typed[position + 1][0] if position + 1 < len(typed) else len(lines)
+        fragments = [match.group(2).strip()] if match.group(2) else []
+        for value in lines[type_line + 1:next_type]:
+            value = value.strip()
+            if not value or value.casefold() in {"name", "type", "description"}:
+                continue
+            if _vertical_field_name(value):
+                continue
+            if re.search(r"^©|^Page\s+\d+", value, re.I):
+                continue
+            fragments.append(value)
+        line_start = absolute_line_offset + field_line + 1
+        line_end = absolute_line_offset + min(next_type, len(lines) - 1) + 1
+        record = {"name": field, "type": match.group(1).lower(),
+                  "description": " ".join(fragments), "direction": direction,
+                  "required": None, "required_basis": "not specified in source"}
+        result.append({"name": field, "direction": direction, "raw": json_text(record),
+                       "evidence": evidence(source, line_start, line_end)})
+    return result
+
+
+def _append_documented_examples(op: dict, source: str, lines: list[str], occurrence_lines: list[int],
+                                section_start: int | None = None, section_end: int | None = None) -> None:
+    """Retain URL request examples and XML response examples as evidence."""
+    basename = str(op.get("url_or_path", "")).rsplit("/", 1)[-1].split("?", 1)[0].casefold()
+    existing = {item.get("raw") for item in op.get("examples", [])}
+    for index in occurrence_lines:
+        if basename and basename not in lines[index].casefold():
+            continue
+        if not re.search(r"https?://|/\w+\.do|\b\w+\.do", lines[index], re.I):
+            continue
+        end = index
+        while end + 1 < len(lines) and end - index < 8:
+            next_line = lines[end + 1].strip()
+            if re.match(r"^(?:©|Page\s+\d+|Expected result|Success:|Fail:|<EXTSYSTEM>)", next_line, re.I):
+                break
+            end += 1
+        raw = "\n".join(lines[index:end + 1]).strip()
+        if raw in existing:
+            continue
+        op["examples"].append({"kind": "request", "raw": raw,
+                                "evidence": evidence(source, index + 1, end + 1)})
+        existing.add(raw)
+
+    xml_re = re.compile(r"<EXTSYSTEM>.*?</EXTSYSTEM>", re.I | re.S)
+    for match in xml_re.finditer(source):
+        line_start = source[:match.start()].count("\n")
+        if section_start is not None and not (section_start <= line_start < (section_end or len(lines))):
+            continue
+        if section_start is None and min(abs(line_start - index) for index in occurrence_lines) > 180:
+            continue
+        raw = match.group(0).strip()
+        if raw in existing:
+            continue
+        kind = "response_error" if re.search(r"<RESULT>\s*ERROR\s*</RESULT>", raw, re.I) else "response_success"
+        line_end = line_start + raw.count("\n")
+        op["examples"].append({"kind": kind, "raw": raw,
+                                "evidence": evidence(source, line_start + 1, line_end + 1)})
+        existing.add(raw)
+
+
+_CALLBACK_HEADING_RE = re.compile(
+    r"^\s*[⦁•]\s*(?P<title>Auth\s+Token|Debit|Revision|Credit\s*&\s*Refund|Refund)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_callback_heading_operations(doc: dict, source: str, lines: list[str], blocks: list[dict]) -> None:
+    """Recover callbacks whose URL is configured outside the document.
+
+    Some PDF manuals use bullet headings such as ``⦁ Debit`` and describe the
+    URL as being configured in an external profile page. There is no literal
+    URL for the normal path rules to match, but the heading is still reliable
+    operation evidence and carries the wallet-flow semantics.
+    """
+    headings = []
+    for index, line in enumerate(lines):
+        match = _CALLBACK_HEADING_RE.match(line)
+        if match:
+            headings.append((index, match.group("title").strip()))
+    if not headings:
+        return
+
+    existing_names = {str(item.get("operation_name", "")).casefold() for item in doc["operations"]}
+    for position, (start, title) in enumerate(headings):
+        if title.casefold() in existing_names:
+            continue
+        end = headings[position + 1][0] if position + 1 < len(headings) else len(lines)
+        block = next((item for item in blocks if item["line_start"] <= start + 1 <= item["line_end"]), blocks[0])
+        name_ref = evidence(source, start + 1, start + 1)
+        op = operation(title, None, None, None, name_ref, block["block_id"])
+        op["source_section"] = {"number": "", "title": title, "line_start": start + 1, "line_end": end}
+        section = "\n".join(lines[start:end])
+        op["logic"] = section.strip()
+        op["source_description"] = _section_description(op["logic"], title)
+        for kind, area_start, area_end in _parameter_areas(section):
+            table_offset = start + section[:area_start].count("\n")
+            op["parameters"].extend(
+                _parse_parameter_rows(section[area_start:area_end], kind, source, table_offset)
+            )
+        for marker in re.finditer(r"(?im)^\s*(?:Example\s+)?(Request|OK Response|Error Response)\s*:?\s*$", section):
+            tail = section[marker.end():]
+            opening = tail.find("{")
+            if opening < 0 or opening > 100:
+                continue
+            raw = _balanced_json_object(tail[opening:])
+            if raw:
+                position_in_section = section.find(raw, marker.end())
+                first_line = start + section[:position_in_section].count("\n") + 1
+                last_line = first_line + raw.count("\n")
+                op["examples"].append({
+                    "kind": marker.group(1).strip().lower().replace(" ", "_"),
+                    "raw": raw,
+                    "evidence": evidence(source, first_line, last_line),
+                })
+        if title.casefold() == "revision":
+            op["adjustment"] = {"type": "ambiguous", "candidates": ["bet_adjustment", "settlement_adjustment", "rollback_adjustment"],
+                                  "basis": ["operation is labelled Revision; source path is external"]}
+        op["review_status"] = "pending"
+        doc["operations"].append(op)
+        existing_names.add(title.casefold())
 
 
 def _balanced_json_object(text: str) -> str | None:
@@ -263,7 +629,7 @@ def _request_endpoint_heads(lines: list[str]) -> list[tuple[int, str, str]]:
 def _parameter_areas(section: str) -> list[tuple[str, int, int]]:
     """Locate request/response field tables, skipping endpoint declaration labels."""
     headings = []
-    pattern = re.compile(r"(?im)^\s*(Request(?:\s+data)?|Response(?:\s+data)?)\s*:?\s*$")
+    pattern = re.compile(r"(?im)^\s*(?:\d+\.\s*)?(Request(?:\s+(?:data|parameters))?|Response(?:\s+(?:data|parameters))?)\s*:?\s*$")
     for match in pattern.finditer(section):
         kind = "request" if match.group(1).lower().startswith("request") else "response"
         following = section[match.end():match.end() + 240]
@@ -272,7 +638,15 @@ def _parameter_areas(section: str) -> list[tuple[str, int, int]]:
                 r"(?is)^\s*(?:(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s*:|\{[A-Za-z_]\w*\}\s*/)",
                 following):
             continue
-        headings.append((kind, match.start(), match.end()))
+        content_start = match.end()
+        # PDF tables often place the `Name` column and its first fields before
+        # the `Request parameters`/`Response parameters` label.
+        prefix_start = max(0, match.start() - 180)
+        prefix = section[prefix_start:match.start()]
+        names = list(re.finditer(r"(?im)^\s*Name\s*$", prefix))
+        if names:
+            content_start = prefix_start + names[-1].start()
+        headings.append((kind, match.start(), content_start))
     result = []
     for index, (kind, _, content_start) in enumerate(headings):
         content_end = headings[index + 1][1] if index + 1 < len(headings) else len(section)
@@ -357,6 +731,32 @@ def _extract_numeric_error_codes(doc: dict, source: str) -> None:
                 "scope": "document", "review_status": "pending", "response_json": None,
                 "evidence": evidence(source, row_index + 1, last_line + 1)})
             seen.add(key)
+        # Some PDF tables are flattened into one column: all numeric codes
+        # appear first, followed by the descriptions in the same order.
+        if not rows:
+            section_end = next((index for index in range(start + 1, stop)
+                                if "\f" in lines[index]), stop)
+            numeric = [(index, line.strip()) for index, line in enumerate(lines[start + 1:section_end], start + 1)
+                       if re.fullmatch(r"\d+", line.strip())]
+            if len(numeric) < 2:
+                continue
+            last_code_line = numeric[-1][0]
+            descriptions = []
+            for index in range(last_code_line + 1, section_end):
+                value = lines[index].strip()
+                if not value or value.casefold() in {"error code", "description"}:
+                    continue
+                descriptions.append((index, value))
+            for position, (row_index, code) in enumerate(numeric):
+                description = descriptions[position][1] if position < len(descriptions) else "Document code entry."
+                last_line = descriptions[position][0] if position < len(descriptions) else row_index
+                key = (code, "document")
+                if key in seen:
+                    continue
+                doc["error_codes"].append({"code": code, "context": description,
+                    "scope": "document", "review_status": "pending", "response_json": None,
+                    "evidence": evidence(source, row_index + 1, last_line + 1)})
+                seen.add(key)
 
 
 def _section_description(section: str, title: str) -> str:
@@ -474,7 +874,10 @@ def _parse_parameter_rows(text: str, direction: str, source: str, absolute_line_
             record["required_basis"] = "not specified in source"
         result.append({"name": parameter["name"], "direction": direction,
                        "raw": json_text(record), "evidence": parameter["evidence"]})
-    return result
+    vertical = _parse_vertical_parameter_rows(text, direction, source, absolute_line_offset)
+    # Prefer the column-aware interpretation when it recovered more fields;
+    # otherwise retain the regular row parser's richer descriptions.
+    return vertical if len(vertical) > len(result) else result
 
 
 def _description_for_next(fragment: str, current: dict | None, next_name: str, next_type: str | None) -> bool:
@@ -546,8 +949,28 @@ def _parameter_row(line: str) -> tuple[str, str | None, bool | None, str] | None
             type_name = type_name.lower()
             required = flag.upper() == "Y" if flag else None
         else:
-            return None
-    if not name or name.lower() in {"parameter", "parameters", "values", "mandatory", "required", "description"}:
+            # MarkItDown/pdf text extraction may flatten a table row into
+            # `name description type required` without separators.
+            tokens = line.strip().split()
+            if not tokens or not re.fullmatch(r"[A-Za-z_][\w.]*", tokens[0]):
+                return None
+            type_index = next((i for i, token in enumerate(tokens[1:], 1)
+                               if token.lower() in _PARAM_TYPES), None)
+            if type_index is None:
+                return None
+            name = tokens[0]
+            type_name = tokens[type_index].lower()
+            required_index = next((i for i, token in enumerate(tokens[type_index + 1:], type_index + 1)
+                                   if token.lower() in {"mandatory", "optional", "required", "yes", "no", "y", "n"}), None)
+            if required_index is not None:
+                marker = tokens[required_index].lower()
+                required = marker in {"mandatory", "required", "yes", "y"}
+                description_parts = [*tokens[1:type_index], *tokens[required_index + 1:]]
+            else:
+                required = None
+                description_parts = tokens[1:type_index]
+            description = " ".join(description_parts)
+    if not name or name.lower() in {"name", "field", "parameter", "parameters", "values", "mandatory", "required", "description"}:
         return None
     return name, type_name, required, description
 

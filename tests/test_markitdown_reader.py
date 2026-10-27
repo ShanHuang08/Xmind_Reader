@@ -17,6 +17,7 @@ from MarkItDown_reader_main import main
 from MarkItDown_reader.artifact_store import ArtifactStore, read_json
 from MarkItDown_reader.contracts import ContractError, digest, json_text, validate_document
 from MarkItDown_reader.registry import normalize, register, STRATEGIES
+from MarkItDown_reader.api_scope import _classify_adjustment
 from MarkItDown_reader.markdown_renderer import render_canonical_markdown
 from MarkItDown_reader.reader import parse_canonical
 
@@ -95,6 +96,87 @@ class CanonicalDocumentTests(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(result["total_operations"], 0)
         self.assertTrue(read_json(Path(result["parse_directory"]) / "sections.json")["blocks"])
+
+    def test_callback_headings_without_literal_paths_become_operations(self):
+        source = """Callback URL
+⦁ Auth Token
+Request path: {based on your input in Profile page}
+Response includes player balance.
+1. Request parameters
+operatorId Your Operator ID int Mandatory
+⦁ Debit
+Request path: {based on your input in Profile page}
+⦁ Credit & Refund
+Request path: {based on your input in Profile page}
+"""
+        doc = normalize(source, {"vendor": "IDNPLAY", "source_id": "test",
+                                 "origin": "pdf", "conversion_id": "test"})
+        self.assertEqual([op["operation_name"] for op in doc["operations"]],
+                         ["Auth Token", "Debit", "Credit & Refund"])
+        self.assertEqual({op["role"] for op in doc["operations"]},
+                         {"authentication", "bet", "settlement"})
+        self.assertTrue(all(op["url_or_path"] is None for op in doc["operations"]))
+        self.assertNotIn("balance", doc["extensions"]["endpoint_selection"]["missing_core_roles"])
+        auth_operation = next(op for op in doc["operations"] if op["operation_name"] == "Auth Token")
+        self.assertGreater(len(auth_operation["parameters"]), 0)
+
+    def test_plain_request_examples_and_flattened_error_codes_are_recovered(self):
+        source = """Authentication request example:
+https://{callback}/authenticate.do?token={token}
+The response contains the player's balance.
+
+Example of a request:
+https://{callback}/betresult.do?bet={bet}
+The same method handles bets and wins.
+
+refundBet.do API requests are sent to reverse a failed bet.
+        Callback URLs support GET/POST method.
+
+VI. Reserved Error codes
+Error code
+Description
+300
+301
+Insufficient funds
+Operation failed
+"""
+        doc = normalize(source, {"vendor": "MegaFair", "source_id": "megafair",
+                                 "origin": "pdf", "conversion_id": "test"})
+        self.assertEqual({op["url_or_path"].split("?")[0].casefold() for op in doc["operations"] if op.get("in_scope")},
+                         {"/authenticate.do", "/betresult.do", "refundbet.do"})
+        self.assertTrue(all(op["http_method"] == "POST" for op in doc["operations"] if op.get("in_scope")))
+        self.assertEqual(len(doc["error_codes"]), 2)
+        self.assertEqual(doc["extensions"]["endpoint_selection"]["missing_core_roles"], [])
+
+    def test_adjustment_classification_requires_directional_evidence(self):
+        self.assertEqual(
+            _classify_adjustment({"operation_name": "Adjust Bet", "logic": "adjustment of the bet amount"})["type"],
+            "bet_adjustment",
+        )
+        self.assertEqual(
+            _classify_adjustment({"operation_name": "Adjust Settlement", "logic": "settlement adjustment for payout"})["type"],
+            "settlement_adjustment",
+        )
+        revision = _classify_adjustment({
+            "operation_name": "Revision",
+            "logic": "increase the player's balance if betStatus is Win, or decrease the balance",
+        })
+        self.assertEqual(revision["type"], "ambiguous")
+        self.assertEqual(revision["candidates"], ["bet_adjustment", "settlement_adjustment", "rollback_adjustment"])
+
+        doc = normalize("⦁ Revision\nRevision adjusts the player's balance if betStatus is Win.",
+                        {"vendor": "Demo", "source_id": "revision", "origin": "pdf", "conversion_id": "test"})
+        revision_op = next(op for op in doc["operations"] if op["operation_name"] == "Revision")
+        self.assertEqual(revision_op["adjustment"]["type"], "ambiguous")
+        self.assertNotEqual(revision_op["role"], "rollback")
+        self.assertEqual(
+            _classify_adjustment({"operation_name": "Credit & Refund", "logic": "increase the player's balance"})["type"],
+            "not_applicable",
+        )
+        self.assertEqual(
+            _classify_adjustment({"operation_name": "Rollback Adjustment", "logic": "rollback adjustment of the original bet"})["type"],
+            "rollback_adjustment",
+        )
 
     def test_canonical_tampering_and_unknown_version_never_fall_back(self):
         _, result = self.read_source()

@@ -951,6 +951,12 @@ def _error_codes_from_section_content(content: list[str]) -> dict[str, str]:
 def _error_section_data_start(tokens: list[str]) -> int:
     mode = _error_section_code_mode(tokens)
     for index, token in enumerate(tokens):
+        # In section-based exports the column headers are flattened into the
+        # same token stream as the rows.  The explicit-code mode accepts
+        # alphabetic codes, so without this guard headers such as "message"
+        # and "Description" are incorrectly emitted as error codes.
+        if _normalize_error_header(token) in {"code", "message", "description", "context"}:
+            continue
         if _is_error_code(token, mode=mode):
             return index
     return 0

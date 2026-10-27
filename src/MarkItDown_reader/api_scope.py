@@ -54,6 +54,70 @@ def _param_names(op: dict) -> set[str]:
     return names
 
 
+def _classify_adjustment(op: dict) -> dict:
+    """Classify an adjustment only when the source provides directional evidence.
+
+    A vendor's ``Revision`` label is not enough to decide whether the change
+    modifies a bet/debit or a settlement/credit. Keep ambiguous revisions
+    explicit so downstream case generation can require review instead of
+    silently treating them as rollbacks.
+    """
+    title = _plain(op.get("operation_name", ""))
+    path = _plain(op.get("url_or_path", ""))
+    action = _plain((op.get("discriminator") or {}).get("value", ""))
+    logic = _plain(op.get("logic", ""))
+    text = f"{title} {path} {action} {logic}"
+    labelled_adjustment = re.search(r"\b(adjust(?:ment|ed|ing)?|revision)\b", title)
+    documented_adjustment = re.search(r"\badjust(?:ment|ed|ing)?\b", text)
+    if not labelled_adjustment and not documented_adjustment:
+        return {"type": "not_applicable", "candidates": [], "basis": []}
+
+    bet_evidence = re.findall(
+        r"\b(?:bet|debit|wager|stake)\b.{0,45}\badjust(?:ment|ed|ing)?\b|"
+        r"\badjust(?:ment|ed|ing)?\b.{0,45}\b(?:bet|debit|wager|stake)\b",
+        text,
+    )
+    settlement_evidence = re.findall(
+        r"\b(?:settlement|settle|credit|payout|win|winning|result)\b.{0,45}\badjust(?:ment|ed|ing)?\b|"
+        r"\badjust(?:ment|ed|ing)?\b.{0,45}\b(?:settlement|settle|credit|payout|win|winning|result)\b",
+        text,
+    )
+    rollback_evidence = re.findall(
+        r"\b(?:rollback|reverse|cancel|void|refund)\b.{0,45}\badjust(?:ment|ed|ing)?\b|"
+        r"\badjust(?:ment|ed|ing)?\b.{0,45}\b(?:rollback|reverse|cancel|void|refund)\b",
+        text,
+    )
+    if re.search(r"\b(?:rollback|reverse|cancel|void|refund)\s+adjust(?:ment|ed|ing)?\b", text):
+        return {"type": "rollback_adjustment", "candidates": ["rollback_adjustment"],
+                "basis": rollback_evidence}
+    directional = [
+        ("bet_adjustment", bet_evidence),
+        ("settlement_adjustment", settlement_evidence),
+        ("rollback_adjustment", rollback_evidence),
+    ]
+    candidates = [name for name, basis in directional if basis]
+    if len(candidates) == 1:
+        name = candidates[0]
+        basis = next(basis for candidate, basis in directional if candidate == name)
+        return {"type": name, "candidates": [name], "basis": basis}
+    if candidates:
+        return {"type": "ambiguous", "candidates": candidates,
+                "basis": [item for _, basis in directional for item in basis]}
+
+    ambiguous_signals = []
+    if re.search(r"\b(?:increase|decrease|add|deduct|subtract)\b.{0,60}\b(?:balance|amount|player)\b", text):
+        ambiguous_signals.append("source describes balance/amount changes")
+    if re.search(r"\bbetstatus\b|\bbet\s+result\b|\bwin\b", text):
+        ambiguous_signals.append("source references bet result state")
+    if title.strip() == "revision" or "revision" in title:
+        ambiguous_signals.append("operation is labelled Revision")
+    if ambiguous_signals:
+        return {"type": "ambiguous", "candidates": ["bet_adjustment", "settlement_adjustment", "rollback_adjustment"],
+                "basis": ambiguous_signals}
+    return {"type": "unknown", "candidates": ["bet_adjustment", "settlement_adjustment", "rollback_adjustment"],
+            "basis": ["adjustment is documented without directional evidence"]}
+
+
 def _role_scores(op: dict) -> tuple[dict[str, int], dict[str, list[str]]]:
     title = _plain(op.get("operation_name", ""))
     path = _plain(op.get("url_or_path", ""))
@@ -62,6 +126,7 @@ def _role_scores(op: dict) -> tuple[dict[str, int], dict[str, list[str]]]:
     action = _plain(discriminator.get("value", "")) if isinstance(discriminator, dict) else ""
     text = f"{title} {path} {action} {logic}"
     names = _param_names(op)
+    adjustment_type = _classify_adjustment(op)["type"]
     scores = {role: 0 for role in TARGET_ROLES}
     clues = {role: [] for role in TARGET_ROLES}
 
@@ -70,7 +135,7 @@ def _role_scores(op: dict) -> tuple[dict[str, int], dict[str, list[str]]]:
         clues[role].append(clue)
 
     # Explicit endpoint names/path segments carry the strongest signal.
-    if re.search(r"\b(authenticate|authentication|authorize|authorization|login)\b", f"{title} {path} {action}"):
+    if re.search(r"\b(auth|auth\s+token|authenticate|authentication|authorize|authorization|login)\b", f"{title} {path} {action}"):
         add("authentication", 7, "operation name/path identifies authentication")
     elif re.search(r"\b(authenticate|authentication|authorize|authorization|validate|verify)\b.{0,60}\b(player|account|session|token|credential)\b|\b(player|account|session|token|credential)\b.{0,60}\b(authenticate|authentication|authorize|authorization|validate|verify)\b", logic):
         add("authentication", 4, "description says the operation authenticates a player/account")
@@ -133,7 +198,12 @@ def _role_scores(op: dict) -> tuple[dict[str, int], dict[str, list[str]]]:
         if ("roundnumber" in names or "roundid" in names) and ("transferid" in names or "amount" in names):
             add("settlement", 1, "request includes round/transfer amount fields")
 
-    if re.search(r"\b(reverse|rollback|refund|cancel|void)\b", f"{title} {path} {action}"):
+    if adjustment_type in {"bet_adjustment", "settlement_adjustment", "ambiguous", "unknown"}:
+        # An adjustment is not automatically a rollback. Its eventual bet vs
+        # settlement meaning is carried in the adjustment metadata and may
+        # require endpoint/variant context before selecting a role.
+        pass
+    elif re.search(r"\b(reverse|rollback|refund|cancel|void)\b", f"{title} {path} {action}"):
         add("rollback", 7, "operation name/path identifies reversal/refund")
     elif re.search(r"\b(reverse|rollback|refund|cancel|void)\b.{0,60}\b(bet|wager|withdraw|transaction|transfer)\b", logic):
         transaction_fields = {"referenceid", "originaltransactionid", "originaltransferid", "transferid"} & names
@@ -143,7 +213,7 @@ def _role_scores(op: dict) -> tuple[dict[str, int], dict[str, list[str]]]:
     if {"referenceid", "transferid"} <= names and ("roundnumber" in names or "roundid" in names):
         add("rollback", 2, "request links a reversal to an original game transaction")
 
-    if re.search(r"\bbet\s+and\s+(?:result|win)\b", f"{title} {path} {action}"):
+    if re.search(r"\b(?:bet\s+and\s+(?:result|win)|bet\s*/\s*result|betresult)\b", f"{title} {path} {action}"):
         add("settlement", 7, "combined bet-and-result operation credits the payout in the same wallet call")
     return scores, clues
 
@@ -151,11 +221,17 @@ def _role_scores(op: dict) -> tuple[dict[str, int], dict[str, list[str]]]:
 def classify_and_select(doc: dict) -> dict:
     """Annotate every discovered operation; retain candidates outside the use-case scope."""
     for op in doc["operations"]:
+        op["adjustment"] = _classify_adjustment(op)
         scores, clues = _role_scores(op)
         combined_bet_result = bool(re.search(
-            r"\bbet\s+and\s+(?:result|win)\b",
+            r"\b(?:bet\s+and\s+(?:result|win)|bet\s*/\s*result|betresult)\b",
             f"{_plain(op.get('operation_name', ''))} {_plain(op.get('url_or_path', ''))}"))
-        best_role = ("settlement" if combined_bet_result else max(TARGET_ROLES, key=lambda role: scores[role]))
+        explicit_rollback = bool(re.search(
+            r"\b(?:rollback|reverse|refund|cancel|void)\b",
+            f"{_plain(op.get('operation_name', ''))} {_plain(op.get('url_or_path', ''))}"))
+        best_role = ("settlement" if combined_bet_result else
+                     "rollback" if explicit_rollback and scores["rollback"] >= 7 and scores["settlement"] < 7 else
+                     max(TARGET_ROLES, key=lambda role: scores[role]))
         best_score = scores[best_role]
         role = best_role if best_score >= 3 else None
         category = _out_of_scope_category(op)
@@ -190,6 +266,23 @@ def classify_and_select(doc: dict) -> dict:
         op["scope_category"] = category or ("game_wallet_callback" if op["in_scope"] else "unclassified")
 
     selected_roles = {op["role"] for op in doc["operations"] if op.get("in_scope")}
+    # A combined Bet/Result endpoint implements both sides of the wallet flow.
+    if any(op.get("in_scope") and re.search(
+            r"\b(?:bet\s+and\s+(?:result|win)|bet\s*/\s*result|betresult)\b",
+            f"{_plain(op.get('operation_name', ''))} {_plain(op.get('url_or_path', ''))}")
+            for op in doc["operations"]):
+        selected_roles.update({"bet", "settlement"})
+    # Some wallet APIs return the current balance as part of authentication
+    # instead of exposing a separate balance endpoint. Treat that documented
+    # response capability as satisfying the balance role without inventing a
+    # second endpoint.
+    if "balance" not in selected_roles and any(
+        op.get("in_scope")
+        and op.get("role") == "authentication"
+        and re.search(r"\bbalance\b", _plain(op.get("logic", "")))
+        for op in doc["operations"]
+    ):
+        selected_roles.add("balance")
     doc["extensions"]["endpoint_selection"] = {
         "profile": "game_wallet_flow/v1",
         "scope_roles": list(TARGET_ROLES),
@@ -209,6 +302,7 @@ def _out_of_scope_category(op: dict) -> str | None:
     if re.search(r"\bpromo\s*win\b", text):
         return None  # A documented promotional payout is an in-scope conditional wallet flow.
     rules = (
+        (r"\b(?:cwguestlogin|cwstartgamev?2?)\.do\b", "game_launch_portal"),
         (r"\b(bet tier|bet tiers|bet configuration|wager configuration)\b", "game_configuration"),
         (r"\b(client portal|game/url|game url)\b", "game_launch_portal"),
         (r"\b(campaign|gift spin)\b", "campaign_management"),
