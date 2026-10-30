@@ -16,6 +16,7 @@ tools/
 phase0-evidence/
 phase0/*.local.json
 old_md/
+ONLINE_XMIND_READER_PLAN.md
 
 # Binary input files (too large for GitHub)
 input_xmind/*.xmind
